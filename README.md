@@ -49,6 +49,7 @@ todo
 
 # Bookmarks
 
+   * Infinite zoom theory: http://www.science.eclipse.co.uk/sft_maths.pdf
    * Basics: https://www.youtube.com/watch?v=FFftmWSzgmk 
    * Approximate PI with Mandelbrot: https://www.youtube.com/watch?v=d0vY0CKYhPY&t=4s
 
