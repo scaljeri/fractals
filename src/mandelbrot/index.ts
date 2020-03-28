@@ -1,6 +1,8 @@
 
 import * as fs from 'fs';
 
+const fileName = './build/data/mandelbrot.json';
+
 console.log('Mandelbrot v1.0.0');
 
 const maxIter = 200;
@@ -71,7 +73,7 @@ function determineStability(
 
 
 function writeDataToFile(grid: Array<number[]>) {
-	fs.writeFile('./mandekbrot.json',
+	fs.writeFile(fileName,
 
 		JSON.stringify(grid),
 

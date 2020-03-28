@@ -1,1 +1,1 @@
-export * from './data-controller';
+export * from './fractals-controller';

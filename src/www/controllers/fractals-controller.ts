@@ -4,33 +4,42 @@ import { Request, Response } from 'express';
 import { Controller, Middleware, Get, Put, Post, Delete } from '@overnightjs/core';
 import { Logger } from '@overnightjs/logger';
 
-@Controller('mandelbrot')
+@Controller('')
 export class ExampleController {
 
-	@Get()
+	@Get('mandelbrot')
 	private getHtMl(req: Request, res: Response) {
-		Logger.Info(req.params.msg);
+		Logger.Info('loading Mandelbrot');
 
 		fs.readFile('./src/mandelbrot/index.html', 'utf8', (err: any, data: string | Buffer) => {
 			if (err) {
-				console.log(err);
+				// tslint:disable-next-line
+				console.error(err);
 			}
 			res.writeHead(200, { 'Content-Type': 'text/html' });
 			res.status(200).end(data);
 		});
+	}
 
-		// res.status(200).json({
+	@Get('data/:name')
+	private getData(req: Request, res: Response) {
+		const file = req.params.name;
+		Logger.Info(`load file: /build/data/${file}.json`);
+
+		fs.readFile(`./build/data/${file}.json`, 'utf8', (err: any, data: string | Buffer) => {
+			if (err) {
+				// tslint:disable-next-line
+				console.error(err);
+			}
+
+			res.writeHead(200, { 'Content-Type': 'text/json' });
+			res.status(OK).end(data);
+		});
+
+		// res.status(OK).json({
 		// 	message: req.params.msg,
 		// });
 	}
-
-	// @Get('data/:msg')
-	// private getMessage(req: Request, res: Response) {
-	// 	Logger.Info(req.params.msg);
-	// res.status(OK).json({
-	// 		message: req.params.msg,
-	// 	});
-	// }
 
 	// @Put(':msg')
 	// private putMessage(req: Request, res: Response) {

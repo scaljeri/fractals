@@ -1,9 +1,60 @@
 <html>
-	<head>
 
-	</head>
+<head>
+	<style>
+		html,
+		body {
+			height: 100%;
+			margin: 0;
+			padding: 0;
+		}
 
-	<body>
-		<h1>Mandelbrot</h1>
-	</body>
+		body {
+			margin: 40px;
+		}
+
+		canvas {
+			border: 1px solid #000;
+			width: 500px;
+			height: 500px;
+		}
+	</style>
+</head>
+
+<body>
+	<h1>Mandelbrot</h1>
+
+	<canvas></canvas>
+
+	<script>
+		fetch('data/mandelbrod')
+			.then((response) => {
+				return response.json();
+			})
+			.then((data) => {
+				const canvas = document.querySelector('canvas');
+				const ctx = canvas.getContext('2d');
+
+				const stepInPixelsX = canvas.clientWidth / data[0].length;
+				const stepInPixelsY = canvas.clientHeight / data.length;
+
+				data.forEach((row, y) => {
+					console.log(y, row)
+					console.log('-----------------')
+					row.forEach((value, x) => {
+						if (value < 70) {
+							ctx.fillStyle = "#00000";
+						} else {
+							ctx.fillStyle = "#FF0000";
+						}
+						ctx.fillRect(x, y, 1, 1);
+						x += stepInPixelsX;
+					});
+					y += stepInPixelsY;
+				})
+			});
+
+	</script>
+</body>
+
 </html>

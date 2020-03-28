@@ -20,6 +20,8 @@ or
 
 # Mandelbrot
 
+## Theory
+
 𝑓(𝑧) = 𝑧 <sup>2</sup> + 𝑐
 
 z<sub>n + 1</sub> = z <sup>2</sup><sub>n</sub> + c 
@@ -30,6 +32,12 @@ z<sub>n + 1</sub> = z <sup>2</sup><sub>n</sub> + c
 2) 𝑧 <sub>1</sub> = 𝑧 <sub>0</sub> + 𝑐
 3) 𝑧 <sub>2</sub> = 𝑧 <sub>1</sub> + 𝑐
 4) etc
+
+## Generate data
+
+    $> yarn mandelbrot
+
+Data is now visible at http://localhost:3000/mandelbrot
 
 # Julia set
 
