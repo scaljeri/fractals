@@ -1,5 +1,21 @@
-# fractals
+# Fractals
 Experimenting with fractals and infinite zooming!
+
+## Setup
+
+    $> yarn
+
+or
+
+    $> npm i
+
+and start the development server
+
+    $> yarn start-dev
+
+or
+
+    $> npm run start-dev
 
 
 # Mandelbrot
@@ -16,6 +32,12 @@ z<sub>n + 1</sub> = z <sup>2</sup><sub>n</sub> + c
 4) etc
 
 # Julia set
+
+todo
+
+# Infinite zooming
+
+todo
 
 # Bookmarks
 
