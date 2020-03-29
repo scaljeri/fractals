@@ -4,14 +4,15 @@ import { Request, Response } from 'express';
 import { Controller, Middleware, Get, Put, Post, Delete } from '@overnightjs/core';
 import { Logger } from '@overnightjs/logger';
 
-@Controller('')
+@Controller('pages')
 export class ExampleController {
 
-	@Get('mandelbrot')
+	@Get(':fractal')
 	private getHtMl(req: Request, res: Response) {
-		Logger.Info('loading Mandelbrot');
+		const fractal = req.params.fractal;
+		Logger.Info(`Page: loading ${fractal}`);
 
-		fs.readFile('./src/mandelbrot/index.html', 'utf8', (err: any, data: string | Buffer) => {
+		fs.readFile(`./src/${fractal}/index.html`, 'utf8', (err: any, data: string | Buffer) => {
 			if (err) {
 				// tslint:disable-next-line
 				console.error(err);

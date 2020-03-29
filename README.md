@@ -11,12 +11,13 @@ or
 
 and start the development server
 
-    $> yarn start-dev
+    $> yarn serve
 
 or
 
-    $> npm run start-dev
+    $> npm run serve
 
+and point you browser to http://localhost:3000
 
 # Mandelbrot
 

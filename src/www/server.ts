@@ -31,6 +31,7 @@ export class FractalsServer extends Server {
 
 	public start(port: number): void {
 		this.app.get('*', (req, res) => {
+			console.log('Req not catched ' + req.url);
 			fs.readFile('./src/www/index.html', 'utf8', (err: any, data: string | Buffer) => {
 				if (err) {
 					console.log(err);

@@ -5,8 +5,9 @@
   "repository": "https://github.com/scaljeri/fractals.git",
   "license": "MIT",
   "scripts": {
-    "mandelbrot": "ts-node ./src/mandelbrot/index.ts",
-    "start-dev": "nodemon --config \"./nodemon.json\"/"
+	"build": "tsc",
+    "mandelbrot": "ts-node  ./src/mandelbrot/index.ts",
+    "serve": "nodemon --config \"./nodemon.json\"/"
   },
   "dependencies": {
     "http-status-codes": "^1.4.0",
