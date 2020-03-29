@@ -13,8 +13,8 @@ const maxI = 2;
 const minR = -2;
 const minI = -2;
 
-const stepsR = 500;
-const stepsI = 500;
+const stepsR = 1000;
+const stepsI = 1000;
 const stepSizeR = (maxR - minR) / stepsR;
 const stepSizeI = (maxI - minI) / stepsI;
 
