@@ -1,5 +1,6 @@
 
 import * as fs from 'fs';
+import { writeDataToFile } from '../utils/write-file';
 
 const fileName = './build/data/mandelbrot.json';
 
@@ -12,8 +13,8 @@ const maxI = 2;
 const minR = -2;
 const minI = -2;
 
-const stepsR = 1000;
-const stepsI = 1000;
+const stepsR = 500;
+const stepsI = 500;
 const stepSizeR = (maxR - minR) / stepsR;
 const stepSizeI = (maxI - minI) / stepsI;
 
@@ -33,15 +34,15 @@ zI = 0;
 const grid: Array<number[]> = [];
 let row: number[];
 
-for (let cR = minR; cR < maxR; cR += stepSizeR) {
+for (let cI = minI; cI < maxI; cI += stepSizeI) {
 	row = [];
-	for (let cI = minI; cI < maxI; cI += stepSizeI) {
+	for (let cR = minR; cR < maxR; cR += stepSizeR) {
 		row.push(determineStability(zR, zI, cR, cI));
 	}
 	grid.push(row);
 }
 
-writeDataToFile(grid);
+writeDataToFile('mandelbrot', grid);
 
 // ----------------
 
@@ -53,7 +54,7 @@ function determineStability(
 
 	// step 1: is this stable
 	// if bigger than 2 it is considered NOT STABLE
-	if (maxIter === count || Math.sqrt(zR ** 2 + zI ** 2) > 2) {
+	if (maxIter === count || (zR ** 2 + zI ** 2) > 8) {
 		return count;
 	}
 
@@ -72,14 +73,3 @@ function determineStability(
 }
 
 
-function writeDataToFile(grid: Array<number[]>) {
-	fs.writeFile(fileName,
-
-		JSON.stringify(grid),
-
-		(err: any) => {
-			if (err) {
-				console.error('Crap happens', err);
-			}
-		});
-}

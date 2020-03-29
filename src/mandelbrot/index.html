@@ -37,17 +37,20 @@
 
 				const stepInPixelsX = canvas.clientWidth / data[0].length;
 				const stepInPixelsY = canvas.clientHeight / data.length;
+				canvas.width = data[0].length;
+				canvas.height = data.length;
 
 				data.forEach((row, y) => {
 					console.log(y, row)
 					console.log('-----------------')
+
+
 					row.forEach((value, x) => {
-						if (value < 70) {
-							ctx.fillStyle = "#00000";
-						} else {
-							ctx.fillStyle = "#FF0000";
-						}
-						ctx.fillRect(x, y, 1, 1);
+						ctx.fillStyle = "blue";
+						if (value < 200) {
+							ctx.fillStyle = "green";
+						} 
+						ctx.fillRect(x * stepInPixelsY, y * stepInPixelsX, 1, 1);
 						x += stepInPixelsX;
 					});
 					y += stepInPixelsY;
