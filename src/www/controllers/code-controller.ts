@@ -7,11 +7,12 @@ import { Logger } from '@overnightjs/logger';
 @Controller('')
 export class CodeController {
 
-	@Get('code/mandelbrot')
-	private getMandelbrotCode(req: Request, res: Response) {
-		Logger.Info('Code: loading Mandelbrot');
+	@Get('code/:fractal')
+	private getFractal(req: Request, res: Response) {
+		const fractal = req.params.fractal;
+		Logger.Info(`Code: loading ${fractal}`);
 
-		fs.readFile('./build/code/mandelbrot/index.js', 'utf8', (err: any, data: string | Buffer) => {
+		fs.readFile(`./build/code/${fractal}/index.js`, 'utf8', (err: any, data: string | Buffer) => {
 			if (err) {
 				// tslint:disable-next-line
 				console.error(err);
