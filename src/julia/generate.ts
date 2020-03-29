@@ -7,18 +7,18 @@ console.log('Mandelbrot v1.0.0');
 
 const maxIter = 200;
 
-const minR = -0.2;
-const maxR = 0.5;
-const maxI = .9;
-const minI = 0.4;
+const minR = -2;
+const maxR = 2;
+const minI = -2;
+const maxI = 2;
 
 const stepsR = 1000;
 const stepsI = 1000;
 const stepSizeR = (maxR - minR) / stepsR;
 const stepSizeI = (maxI - minI) / stepsI;
 
-const cR = 0.6;
-const cI = 0.55;
+const cR = -0.5;
+const cI = 0.5;
 
 const grid: Array<number[]> = [];
 let row: number[];

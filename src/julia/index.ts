@@ -1,3 +1,4 @@
+import { colorGrid } from '../utils/coloring-grid';
 import { getColorHsl } from '../utils/coloring-hls';
 
 fetch('/data/julia')
