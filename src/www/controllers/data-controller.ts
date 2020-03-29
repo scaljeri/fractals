@@ -12,7 +12,7 @@ export class DataController {
 		const fractal = req.params.fractal;
 		Logger.Info(`Page: loading ${fractal}`);
 
-		fs.readFile(`./src/${fractal}/index.html`, 'utf8', (err: any, data: string | Buffer) => {
+		fs.readFile(`./build/data/${fractal}.json`, 'utf8', (err: any, data: string | Buffer) => {
 			if (err) {
 				// tslint:disable-next-line
 				console.error(err);
@@ -25,7 +25,7 @@ export class DataController {
 	@Get(':name')
 	private getData(req: Request, res: Response) {
 		const file = req.params.name;
-		Logger.Info(`load file: /build/data/${file}.json`);
+		Logger.Info(`Data: /build/data/${file}.json`);
 
 		fs.readFile(`./build/data/${file}.json`, 'utf8', (err: any, data: string | Buffer) => {
 			if (err) {

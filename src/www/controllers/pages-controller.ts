@@ -22,25 +22,25 @@ export class PagesController {
 		});
 	}
 
-	@Get('data/:name')
-	private getData(req: Request, res: Response) {
-		const file = req.params.name;
-		Logger.Info(`load file: /build/data/${file}.json`);
+	// @Get('data/:name')
+	// private getData(req: Request, res: Response) {
+	// 	const file = req.params.name;
+	// 	Logger.Info(`load file: /build/data/${file}.json`);
 
-		fs.readFile(`./build/data/${file}.json`, 'utf8', (err: any, data: string | Buffer) => {
-			if (err) {
-				// tslint:disable-next-line
-				console.error(err);
-			}
+	// 	fs.readFile(`./build/data/${file}.json`, 'utf8', (err: any, data: string | Buffer) => {
+	// 		if (err) {
+	// 			// tslint:disable-next-line
+	// 			console.error(err);
+	// 		}
 
-			res.writeHead(200, { 'Content-Type': 'text/json' });
-			res.status(OK).end(data);
-		});
+	// 		res.writeHead(200, { 'Content-Type': 'text/json' });
+	// 		res.status(OK).end(data);
+	// 	});
 
-		// res.status(OK).json({
-		// 	message: req.params.msg,
-		// });
-	}
+	// 	// res.status(OK).json({
+	// 	// 	message: req.params.msg,
+	// 	// });
+	// }
 
 	// @Put(':msg')
 	// private putMessage(req: Request, res: Response) {

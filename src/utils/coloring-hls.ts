@@ -8,6 +8,10 @@ export function getColorHsl(iter: number, maxIter: number) {
 	let b;
 	let hue2rgb;
 
+	if (iter === maxIter) {
+		return [0,0,0];
+	}
+
 	hue2rgb = (a: number, c: number, t: number) => {
 		if (t < 0) { t += 1; }
 		if (t > 1) { t -= 1; }

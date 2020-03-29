@@ -13,12 +13,7 @@ fetch('/data/mandelbrot')
 
 		data.forEach((row, y) => {
 			row.forEach((value, x) => {
-				if (value === 200) {
-					ctx.fillStyle = 'black';
-				} else {
-					ctx.fillStyle = 'rgb(' + getColorHsl(value, 200).join(', ') + ')';
-				}
-
+				ctx.fillStyle = 'rgb(' + getColorHsl(value, 200).join(', ') + ')';
 				ctx.fillRect(x, y, 1, 1);
 			});
 		})

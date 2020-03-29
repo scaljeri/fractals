@@ -1,6 +1,6 @@
 import { getColorHsl } from '../utils/coloring-hls';
 
-fetch('data/mandelbrot')
+fetch('/data/julia')
 	.then((response) => {
 		return response.json();
 	})

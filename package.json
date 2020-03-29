@@ -6,7 +6,8 @@
   "license": "MIT",
   "scripts": {
 	"build": "tsc",
-    "mandelbrot": "ts-node  ./src/mandelbrot/index.ts",
+    "mandelbrot": "ts-node -P ./tsconfig-debug.json ./src/mandelbrot/generate.ts",
+    "julia": "ts-node -P ./tsconfig-debug.json ./src/julia/generate.ts",
     "serve": "nodemon --config \"./nodemon.json\"/"
   },
   "dependencies": {
