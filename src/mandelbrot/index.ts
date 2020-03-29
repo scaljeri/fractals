@@ -8,9 +8,9 @@ console.log('Mandelbrot v1.0.0');
 
 const maxIter = 200;
 
-const maxR = 2;
+const maxR = 1.5;
 const maxI = 2;
-const minR = -2;
+const minR = -2.5;
 const minI = -2;
 
 const stepsR = 1000;
