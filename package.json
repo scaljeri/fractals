@@ -8,7 +8,7 @@
 	"build": "tsc",
     "mandelbrot": "ts-node -P ./tsconfig-debug.json ./src/mandelbrot/generate.ts",
     "julia": "ts-node -P ./tsconfig-debug.json ./src/julia/generate.ts",
-    "serve": "nodemon --config \"./nodemon.json\"/"
+    "serve": "yarn build && nodemon --config \"./nodemon.json\"/"
   },
   "dependencies": {
     "http-status-codes": "^1.4.0",
