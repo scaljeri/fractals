@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mandelbrot · WebGPU</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #ddd; }
+    #canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+    #selection {
+      position: absolute;
+      border: 1.5px solid #fff;
+      background: rgba(255, 255, 255, 0.06);
+      pointer-events: none;
+      display: none;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.2);
+    }
+    /* Two-column topbar: HUD on the left, controls on the right.
+       Both live inside #topbar so they share horizontal space via flex
+       instead of fighting over absolute-positioned overlap. The HUD takes
+       its content width up to ~45vw; controls flex to fill the rest and
+       can wrap onto a second row as a unit when there's not enough space.
+       Pointer-events: none on the topbar wrapper itself so the canvas
+       stays clickable in the gap between the two boxes. */
+    #topbar {
+      position: absolute; top: 8px; left: 8px; right: 8px;
+      display: flex; align-items: flex-start; gap: 8px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #hud, #controls { pointer-events: auto; }
+    #hud {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 45vw;
+      padding: 8px 12px; background: rgba(0, 0, 0, 0.85);
+      border-radius: 6px; font-size: 12px; line-height: 1.5;
+      user-select: none;
+    }
+    /* The zoom input + suffix accept clicks/keystrokes; the rest of the HUD
+       (kbd hints, iter count) stays passive so it can't accidentally swallow
+       canvas clicks/drags. */
+    #hud > div:not(#zoom-row) { pointer-events: none; }
+    #zoom-row { display: flex; align-items: center; gap: 3px; }
+    #zoom-row .zoom-label { color: #ddd; margin-right: 3px; }
+    #zoom-row .zoom-sep { color: #aaa; }
+    #zoom-row .zoom-base { color: #ddd; }
+    #zoom-row .zoom-caret { color: #aaa; }
+    #zoom-mantissa, #zoom-exp {
+      background: rgba(0,0,0,0.3); color: #fff;
+      border: 1px solid #555; border-radius: 3px;
+      padding: 1px 5px; font-family: inherit; font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    #zoom-mantissa { width: 5ch; }
+    #zoom-exp { width: 4ch; }
+    #zoom-mantissa:focus, #zoom-exp:focus { outline: 1px solid #5af; border-color: #5af; }
+    #zoom-suffix { color: #aaa; margin-left: 4px; }
+    /* Click-zoom idle spinner — fills up over 1s while we wait for the user
+       to stop clicking before kicking off the expensive full-res render. */
+    #click-spinner {
+      position: fixed; width: 28px; height: 28px;
+      pointer-events: none; transform: translate(-50%, -50%);
+      display: none; z-index: 100;
+    }
+    #click-spinner.active { display: block; }
+    #click-spinner circle.track { stroke: rgba(0, 0, 0, 0.55); }
+    #click-spinner circle.fill {
+      stroke: #fff;
+      transform: rotate(-90deg); transform-origin: 50% 50%;
+      stroke-dasharray: 100; stroke-dashoffset: 100;
+    }
+    #click-spinner.active circle.fill {
+      animation: click-spinner-fill 2s linear forwards;
+    }
+    @keyframes click-spinner-fill {
+      from { stroke-dashoffset: 100; }
+      to   { stroke-dashoffset: 0; }
+    }
+    kbd { background: #2a2a2a; padding: 1px 6px; border-radius: 3px; font-size: 11px; border: 1px solid #444; }
+    .btn {
+      background: rgba(0, 0, 0, 0.85); color: #ddd;
+      border: 1px solid #444; padding: 6px 12px;
+      border-radius: 6px; font-family: inherit; font-size: 12px;
+      cursor: pointer;
+      display: inline-block; text-decoration: none;  /* consistent for <a.btn> too */
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.1); }
+    .btn.active { background: #2a5fff; border-color: #4a7fff; color: #fff; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #controls {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex; gap: 6px; align-items: center;
+      flex-wrap: wrap; justify-content: flex-end;
+      padding: 6px 8px; background: rgba(0, 0, 0, 0.85); border-radius: 6px;
+      backdrop-filter: blur(2px);
+    }
+    #controls input {
+      width: 48px; background: rgba(0,0,0,0.55); color: #ddd;
+      border: 1px solid #444; padding: 4px 6px; border-radius: 4px;
+      font-family: inherit; font-size: 12px;
+    }
+    /* Full-precision re/im — 28-digit DD strings don't fit otherwise. */
+    #controls input#coord-re, #controls input#coord-im {
+      width: 200px; font-variant-numeric: tabular-nums;
+    }
+    #controls input::placeholder { color: #777; font-style: italic; }
+    #controls label {
+      font-size: 11px; color: #ddd;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    }
+    #progress {
+      position: absolute; bottom: 16px; left: 50%;
+      transform: translateX(-50%);
+      display: none; align-items: center; gap: 12px;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid #444; border-radius: 8px;
+      padding: 10px 14px;
+    }
+    #progress.active { display: flex; }
+    #progress-bar {
+      width: 240px; height: 6px; background: #222;
+      border-radius: 3px; overflow: hidden;
+    }
+    #progress-fill {
+      height: 100%; background: #5af; width: 0%;
+      transition: width 0.1s linear;
+    }
+    #progress-text { font-size: 12px; white-space: nowrap; }
+    #progress-cancel { margin-left: 4px; }
+    #arm-bar {
+      position: absolute; bottom: 24px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.85);
+      border: 1px solid #555; border-radius: 8px;
+      padding: 10px 16px; display: none;
+      align-items: center; gap: 12px; font-size: 13px;
+    }
+    #arm-bar.active { display: flex; }
+    #record-modal, #stats-modal {
+      position: absolute; inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: none; align-items: center; justify-content: center;
+      z-index: 10;
+    }
+    #record-modal.active, #stats-modal.active { display: flex; }
+    #record-modal .card, #stats-modal .card {
+      background: #1a1a1a; border: 1px solid #555; border-radius: 8px;
+      padding: 20px 24px; min-width: 360px;
+      display: flex; flex-direction: column; gap: 14px;
+      font-size: 13px;
+    }
+    #record-modal h3, #stats-modal h3 { margin: 0; font-size: 14px; color: #fff; font-weight: 600; }
+    #record-modal label.target { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    #record-modal label.target input[type=checkbox] { accent-color: #5af; }
+    #record-modal label.target .hint { color: #888; font-size: 11px; margin-left: auto; }
+    #record-modal label.target.disabled { color: #666; cursor: not-allowed; }
+    #record-modal .actions, #stats-modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+    #record-modal .record-params {
+      display: grid; grid-template-columns: max-content 1fr;
+      column-gap: 12px; row-gap: 6px; align-items: center;
+      padding-bottom: 6px; border-bottom: 1px solid #333;
+    }
+    #record-modal .record-params label { color: #aaa; font-size: 12px; }
+    #record-modal .record-params input {
+      width: 80px; background: rgba(255,255,255,0.04); color: #ddd;
+      border: 1px solid #444; padding: 4px 6px; border-radius: 4px;
+      font-family: inherit; font-size: 12px;
+    }
+    #record-modal .rec-renderer {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding-bottom: 6px; border-bottom: 1px solid #333;
+    }
+    #record-modal .rec-renderer .rr-label { color: #aaa; font-size: 12px; }
+    #record-modal .rec-renderer label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: 12px; }
+    #record-modal .rec-renderer input[type=radio] { accent-color: #5af; margin: 0; }
+    #record-modal .rec-renderer .hint { color: #888; font-size: 11px; margin-left: auto; }
+    .stats-grid { display: grid; grid-template-columns: max-content 1fr; column-gap: 24px; row-gap: 8px; font-variant-numeric: tabular-nums; }
+    .stats-grid .label { color: #888; }
+    .stats-grid .value { color: #ddd; text-align: right; }
+    .stats-grid .sep { grid-column: 1 / -1; border-top: 1px solid #333; margin: 4px 0; }
+    .stats-grid .highlight .label, .stats-grid .highlight .value { color: #fff; }
+    #error {
+      position: absolute; inset: 0; display: none;
+      align-items: center; justify-content: center;
+      background: #000; color: #f88; padding: 24px; text-align: center;
+    }
+    #snackbar {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(16px);
+      background: rgba(20, 20, 20, 0.92); color: #fff;
+      border: 1px solid #555; border-radius: 6px;
+      padding: 10px 16px; font-size: 13px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 200;
+    }
+    #snackbar.active {
+      opacity: 1; transform: translateX(-50%) translateY(0);
+    }
+    #coord-marker {
+      position: fixed; width: 18px; height: 18px;
+      transform: translate(-50%, -50%) scale(1);
+      pointer-events: none; display: none;
+      z-index: 90;
+      transition: transform 0.18s ease-out, filter 0.18s ease-out;
+    }
+    #coord-marker.active { display: block; }
+    /* While the mouse is moving over the canvas, scale the marker up and add
+       a glow so it's easy to spot against the fractal. Decays back to the
+       subtle base look after the mouse rests. */
+    #coord-marker.highlighted {
+      transform: translate(-50%, -50%) scale(1.6);
+      filter: drop-shadow(0 0 6px rgba(120, 200, 255, 0.95));
+    }
+    #coord-marker svg { width: 100%; height: 100%; overflow: visible; }
+    #coord-marker svg .ring { stroke: #fff; stroke-width: 2; fill: none; opacity: 0.95; }
+    #coord-marker svg .dot  { fill: #5af; }
+    #coord-marker svg .halo { stroke: rgba(0, 0, 0, 0.6); stroke-width: 4; fill: none; }
+    /* Per-tile flash. Positioned absolutely over the canvas region a tile
+       just landed in, gets a yellow border that fades over ~600ms so the
+       user can see WHICH worker just delivered. */
+    .tile-flash {
+      position: fixed; pointer-events: none;
+      box-sizing: border-box;
+      border: 2px solid #fc0;
+      box-shadow: 0 0 8px rgba(255, 204, 0, 0.6) inset, 0 0 8px rgba(255, 204, 0, 0.6);
+      animation: tile-flash-anim 600ms ease-out forwards;
+      z-index: 80;
+    }
+    @keyframes tile-flash-anim {
+      0%   { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    #cpu-status {
+      /* Bottom-centred so it doesn't compete with the top toolbar for space.
+         Sits above the snackbar (bottom:24px) so both can be visible at once. */
+      position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%);
+      background: rgba(20, 20, 20, 0.9); color: #fff;
+      border: 1px solid #555; border-radius: 6px;
+      padding: 6px 12px; font-size: 12px;
+      display: none; align-items: center; gap: 8px;
+      pointer-events: none; z-index: 150;
+    }
+    #cpu-status.active { display: inline-flex; }
+    #cpu-status::before {
+      content: ''; width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff;
+      animation: cpu-status-spin 0.9s linear infinite;
+    }
+    @keyframes cpu-status-spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="selection"></div>
+  <svg id="click-spinner" viewBox="0 0 36 36">
+    <circle class="track" cx="18" cy="18" r="16" stroke-width="3" fill="none"/>
+    <circle class="fill"  cx="18" cy="18" r="16" stroke-width="3" fill="none"/>
+  </svg>
+  <div id="topbar">
+  <div id="hud">
+    <div id="zoom-row">
+      <span class="zoom-label">zoom</span>
+      <input id="zoom-mantissa" type="text" autocomplete="off" spellcheck="false" title="Mantissa. Tab/click out to apply.">
+      <span class="zoom-sep">·</span>
+      <span class="zoom-base">10</span>
+      <span class="zoom-caret">^</span>
+      <input id="zoom-exp" type="text" autocomplete="off" spellcheck="false" title="Exponent (integer). Tab/click out to apply.">
+      <span id="zoom-suffix"></span>
+    </div>
+    <div id="iter">iter 200</div>
+    <div id="kbd-hints" style="margin-top: 4px; font-size: 11px; color: #aaa;">
+      <kbd>click</kbd> in · <kbd>shift-click</kbd> out · <kbd>space</kbd>/<kbd>shift-space</kbd> zoom · <kbd>h</kbd> quality
+    </div>
+  </div>
+  <div id="controls">
+    <label>palette</label>
+    <select id="palette" class="btn" title="Colour palette used for rendering, recording, and Jetson jobs.">
+      <option value="warm" selected>warm</option>
+      <option value="lava">lava</option>
+      <option value="ocean">ocean</option>
+      <option value="electric">electric</option>
+      <option value="rainbow">rainbow</option>
+    </select>
+    <label>re</label><input id="coord-re" type="text" value="-0.743643887037151" placeholder="click" title="Real part. Click the canvas to fill automatically, or type to set manually.">
+    <label>im</label><input id="coord-im" type="text" value="0.131825904205330" placeholder="click" title="Imaginary part. Click the canvas to fill automatically, or type to set manually.">
+    <a id="jetson-link" class="btn" target="_blank" rel="noopener" style="display:none" title="Open the Jetson render-jobs dashboard in a new tab">jobs</a>
+    <button id="auto-zoom" class="btn" title="Auto-zoom toward the canvas centre. Click to start, click again to stop. Each step waits for the previous render to finish before firing the next, so deep-zoom (slow renders) just zooms more slowly — the chain never queues up faster than the renderer can keep up.">▶ auto</button>
+    <label title="Preset interesting locations curated from the deep-zoom community (mandelbrot.neocities.org gallery, MROB Mu-Ency, Paul Bourke, Misiurewicz points). Selecting one warps the view there and triggers a render.">preset</label>
+    <select id="presets" class="btn" title="Preset interesting locations curated from the deep-zoom community. Selecting one warps the view there and triggers a render.">
+      <option value="" selected>—</option>
+      <optgroup label="Shallow (zoom 10² – 10⁵)">
+        <option value="seahorse-valley">Seahorse Valley</option>
+        <option value="elephant-valley">Elephant Valley</option>
+        <option value="triple-spiral-valley">Triple Spiral Valley</option>
+        <option value="seahorse-horn">Seahorse's Horn</option>
+        <option value="elephant-trunk">Elephant's Trunk</option>
+      </optgroup>
+      <optgroup label="Medium (10⁷ – 10⁹) — GPU TD-f32">
+        <option value="line-zero">Line Zero</option>
+        <option value="carousel">Carousel</option>
+        <option value="turbulence">Turbulence</option>
+        <option value="lsd">LSD</option>
+      </optgroup>
+      <optgroup label="Deep (10¹⁰ – 10¹³) — exits GPU mode">
+        <option value="sprites">Sprites</option>
+        <option value="wormhole">Wormhole</option>
+        <option value="praline">Praline</option>
+        <option value="elephants-eye">Elephant's Eye</option>
+        <option value="galaxies">Galaxies</option>
+        <option value="tante-renate">Tante Renate's spot</option>
+      </optgroup>
+      <optgroup label="Misiurewicz (orbit-search test)">
+        <option value="m23-2">M₂₃,₂ — two-arm spiral in Seahorse Valley</option>
+      </optgroup>
+    </select>
+    <button id="copy-clipboard" class="btn" title="Copy the current view to the clipboard as a PNG image. Same as ⌘/Ctrl+C. Paste into Slack, mail, image editors, etc.">copy</button>
+    <button id="screenshot" class="btn" title="Download the current view as a PNG file. The file lands in your Downloads folder named mandelbrot-<timestamp>.png.">screenshot</button>
+    <label>cpus</label><input id="cpu-count" type="number" min="1" step="1" title="Number of CPU workers used in CPU mode (zoom ≥ 10²⁰). Default is hardware cores − 1, leaving one core for the main thread to handle input and compositing. Persisted in localStorage.">
+    <label title="Render width override. 'auto' picks based on zoom depth (full at < 10²⁰, halved at 10²⁰⁻³⁰, quartered at 10³⁰⁻⁵⁰, eighth past 10⁵⁰). Manual values force the render at that pixel width regardless of zoom; height follows aspect ratio. Lower = faster + less detail, useful for deep-zoom previews. Persisted in localStorage.">render w</label><select id="render-width" class="btn" title="Render width override. 'auto' picks based on zoom depth (full at < 10²⁰, halved at 10²⁰⁻³⁰, quartered at 10³⁰⁻⁵⁰, eighth past 10⁵⁰). Manual values force the render at that pixel width regardless of zoom; height follows aspect ratio. Lower = faster + less detail, useful for deep-zoom previews. Persisted in localStorage.">
+      <option value="auto" selected>auto</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+      <option value="400">400</option>
+      <option value="800">800</option>
+      <option value="1920">1920</option>
+    </select>
+    <button id="record" class="btn" title="Open the recording panel. Configure duration, FPS, zoom-speed, and target backend (browser GPU, Jetson, or both); writes an MP4 of a smooth zoom-in toward the current re/im.">record</button>
+    <button id="reset" class="btn" title="Reset view to home (the seahorse valley at zoom 1.3). Cancels any in-flight render.">reset</button>
+  </div>
+  </div>
+  <div id="record-modal">
+    <div class="card">
+      <h3>Record</h3>
+      <div class="record-params">
+        <label>duration (s)</label><input id="duration" type="number" value="15" min="1" max="1200" step="1" title="Video length in seconds. Total frames = duration × fps.">
+        <label>fps</label><input id="fps" type="number" value="60" min="15" max="120" step="1">
+        <label>zoom ×/s</label><input id="speed" type="number" value="6" min="1.1" max="20" step="0.5" title="Zoom speed: how many times the view shrinks per second. 6 = view halves roughly every 0.4s.">
+      </div>
+      <div class="rec-renderer">
+        <span class="rr-label">renderer</span>
+        <label><input type="radio" name="rec-renderer" value="auto" checked> auto</label>
+        <label><input type="radio" name="rec-renderer" value="gpu"> GPU</label>
+        <label><input type="radio" name="rec-renderer" value="cpu"> CPU</label>
+        <span class="hint">auto = CPU past 10²⁰ zoom</span>
+      </div>
+      <label class="target">
+        <input type="checkbox" id="rec-browser" checked>
+        <span>browser</span>
+        <span class="hint">local, H.264 via WebCodecs</span>
+      </label>
+      <label class="target" id="rec-jetson-label">
+        <input type="checkbox" id="rec-jetson">
+        <span>jetson</span>
+        <span class="hint" id="rec-jetson-hint">checking…</span>
+      </label>
+      <div class="actions">
+        <button id="rec-modal-cancel" class="btn">cancel</button>
+        <button id="rec-modal-start" class="btn">start</button>
+      </div>
+    </div>
+  </div>
+  <div id="stats-modal">
+    <div class="card">
+      <h3>Record complete</h3>
+      <div id="stats-body" class="stats-grid"></div>
+      <div class="actions">
+        <button id="stats-ok" class="btn">ok</button>
+      </div>
+    </div>
+  </div>
+  <div id="arm-bar">
+    <span>Click where you want to zoom in to begin</span>
+    <button id="arm-cancel" class="btn">cancel</button>
+  </div>
+  <div id="progress">
+    <div id="progress-text">…</div>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <button id="progress-cancel" class="btn">cancel</button>
+  </div>
+  <div id="error"></div>
+  <div id="snackbar"></div>
+  <div id="cpu-status"><span id="cpu-status-text">rendering on CPU…</span></div>
+  <div id="coord-marker" title="Coordinate from the re/im inputs">
+    <svg viewBox="-9 -9 18 18">
+      <circle class="halo" cx="0" cy="0" r="7"/>
+      <circle class="ring" cx="0" cy="0" r="7"/>
+      <circle class="dot"  cx="0" cy="0" r="2"/>
+    </svg>
+  </div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

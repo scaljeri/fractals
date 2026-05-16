@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mandelbrot · jobs</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0; padding: 0; min-height: 100%;
+      background: #0b0b0d; color: #ddd;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+    }
+    body { padding: 20px 28px 80px; }
+    h1 { margin: 0 0 4px; font-size: 18px; }
+    .sub { color: #888; margin-bottom: 16px; }
+    a.back { color: #5af; text-decoration: none; }
+    a.back:hover { text-decoration: underline; }
+
+    .bar {
+      display: flex; gap: 8px; align-items: center;
+      margin-bottom: 14px; flex-wrap: wrap;
+    }
+    .btn {
+      background: #1a1a1e; color: #ddd;
+      border: 1px solid #333; padding: 6px 12px;
+      border-radius: 6px; font-family: inherit; font-size: 12px;
+      cursor: pointer;
+    }
+    .btn:hover:not(:disabled) { background: #252530; border-color: #555; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn.danger { border-color: #662b2b; color: #f99; }
+    .btn.danger:hover:not(:disabled) { background: #2a1414; }
+
+    .summary {
+      margin-left: auto; color: #888; font-size: 12px;
+    }
+    .summary .dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; margin: 0 4px 0 10px; vertical-align: middle;
+    }
+    .dot.running  { background: #5af; }
+    .dot.queued   { background: #bbb; }
+    .dot.done     { background: #5c5; }
+    .dot.failed   { background: #f55; }
+    .dot.cancelled{ background: #888; }
+    .dot.cancelling{ background: #c93; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      padding: 8px 10px; text-align: left;
+      border-bottom: 1px solid #1f1f23;
+      vertical-align: top;
+    }
+    th { color: #888; font-weight: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    tr:hover td { background: #15151a; }
+    td.id { color: #888; font-size: 11px; }
+    td.coords { color: #aaa; font-size: 11px; }
+    td.status { text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+    td.status.running { color: #5af; }
+    td.status.queued { color: #bbb; }
+    td.status.done { color: #5c5; }
+    td.status.failed { color: #f66; }
+    td.status.cancelled { color: #888; }
+    td.status.cancelling { color: #c93; }
+
+    .progress-cell { width: 180px; }
+    .progress-bar {
+      width: 100%; height: 6px; background: #1a1a1e;
+      border-radius: 3px; overflow: hidden; margin-bottom: 3px;
+    }
+    .progress-fill {
+      height: 100%; background: #5af;
+      transition: width 0.2s linear;
+    }
+    .progress-fill.done { background: #5c5; }
+    .progress-fill.failed { background: #f55; }
+    .progress-fill.cancelled { background: #666; }
+    .progress-fill.cancelling { background: #c93; }
+    .progress-label { font-size: 10px; color: #888; }
+
+    .error {
+      color: #f99; font-size: 11px;
+      max-width: 520px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    td.actions { white-space: nowrap; }
+    td.actions .btn { padding: 4px 10px; font-size: 11px; }
+
+    .empty {
+      padding: 40px 20px; text-align: center; color: #666;
+      border: 1px dashed #2a2a30; border-radius: 8px;
+    }
+    .toast {
+      position: fixed; bottom: 18px; left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a1e; border: 1px solid #333;
+      padding: 8px 14px; border-radius: 6px;
+      font-size: 12px; color: #ddd;
+      display: none;
+    }
+    .toast.show { display: block; }
+    .toast.err  { border-color: #662b2b; color: #f99; }
+  </style>
+</head>
+<body>
+  <h1>Jetson render jobs</h1>
+  <div class="sub">
+    <a class="back" href="/">← back to renderer</a>
+    &nbsp;·&nbsp; backend: <code id="backend-url">…</code>
+    &nbsp;·&nbsp; <span id="version-info">deploy: …</span>
+    &nbsp;·&nbsp; <span id="worker-info">worker: …</span>
+  </div>
+
+  <div class="bar">
+    <button class="btn" id="refresh">refresh</button>
+    <button class="btn danger" id="cancel-queued">cancel queued</button>
+    <button class="btn danger" id="clear-finished">clear finished</button>
+    <span class="summary" id="summary">connecting…</span>
+  </div>
+
+  <div id="jobs-container"></div>
+  <div class="toast" id="toast"></div>
+
+<script type="module">
+// Keep this in sync with main.js. If you change the resolution rule there,
+// change it here too.
+const PRODUCTION_HOST = 'mandelbrot.calje.eu';
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const LAN_JETSON_URL = 'http://monster:8080';
+function resolveJetsonUrl() {
+  const host = window.location.hostname;
+  if (host === PRODUCTION_HOST) return window.location.origin + '/gpu';
+  if (LOCAL_HOSTS.has(host))   return LAN_JETSON_URL;
+  return localStorage.getItem('jetsonUrl') || 'http://jetson.local:8080';
+}
+const BASE = resolveJetsonUrl().replace(/\/$/, '');
+document.getElementById('backend-url').textContent = BASE;
+
+const container = document.getElementById('jobs-container');
+const summaryEl = document.getElementById('summary');
+const toastEl   = document.getElementById('toast');
+const cancelQueuedBtn   = document.getElementById('cancel-queued');
+const clearFinishedBtn  = document.getElementById('clear-finished');
+
+function toast(msg, kind = '') {
+  toastEl.textContent = msg;
+  toastEl.className = 'toast show' + (kind === 'err' ? ' err' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => toastEl.classList.remove('show'), 2500);
+}
+
+function fmtCoords(req) {
+  const re = (req?.center_re ?? '').toString();
+  const im = (req?.center_im ?? '').toString();
+  const shortRe = re.length > 10 ? re.slice(0, 10) + '…' : re;
+  const shortIm = im.length > 10 ? im.slice(0, 10) + '…' : im;
+  return `${shortRe}\n${shortIm}`;
+}
+function fmtSize(req) {
+  if (!req) return '';
+  return `${req.width}×${req.height} · ${req.frames}f @ ${req.fps}`;
+}
+function fmtAge(t) {
+  if (!t) return '';
+  const s = (Date.now() / 1000) - t;
+  if (s < 60)       return `${s.toFixed(0)}s ago`;
+  if (s < 3600)     return `${(s / 60).toFixed(0)}m ago`;
+  if (s < 86400)    return `${(s / 3600).toFixed(1)}h ago`;
+  return `${(s / 86400).toFixed(1)}d ago`;
+}
+function fmtDuration(job) {
+  if (!job.started_at) return '';
+  const end = job.finished_at ?? (Date.now() / 1000);
+  const s = end - job.started_at;
+  if (s < 60)    return `${s.toFixed(1)}s`;
+  return `${(s / 60).toFixed(1)}m`;
+}
+
+async function fetchJobs() {
+  const r = await fetch(`${BASE}/jobs`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function deleteJob(id) {
+  const r = await fetch(`${BASE}/jobs/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+function renderVersion(v) {
+  const el = document.getElementById('version-info');
+  if (!el) return;
+  el.textContent = v ? `deploy: ${v}` : 'deploy: unknown';
+}
+
+function renderWorkerInfo(w) {
+  if (!w) return;
+  const now = w.num_inflight_now ?? 0;
+  const max = w.num_inflight_max ?? '?';
+  const enc = w.encoder ?? '?';
+  const cpu = w.cpu_threads;
+  const s = w.stats || {};
+  const frames = s.frames_done ?? 0;
+  const gpuAvg = frames > 0 ? (s.gpu_ms_total / frames) : 0;
+  const cpuAvg = frames > 0 ? (s.cpu_ms_total / frames) : 0;
+  const totalAvg = gpuAvg + cpuAvg;
+  const fpsEff = totalAvg > 0 ? (1000 / totalAvg) : 0;
+
+  const slots = Array.from({ length: max }, (_, i) =>
+    i < now ? '▰' : '▱',
+  ).join('');
+
+  const gpuBar = renderRatioBar(gpuAvg, cpuAvg);
+
+  document.getElementById('worker-info').innerHTML = `
+    encoder: <b>${escapeHtml(enc)}</b>${cpu ? ` <span style="color:#888">(${cpu} threads)</span>` : ''}
+    · gpu pipeline: <span style="font-family:monospace;letter-spacing:2px;color:${now ? '#5af' : '#666'}">${slots}</span>
+    <span style="color:#888">${now}/${max}</span>
+    ${frames > 0 ? `
+      <div style="margin-top:6px;font-size:11px;color:#aaa;">
+        per-frame avg (n=${frames}):
+        <span style="color:#5af">GPU ${gpuAvg.toFixed(1)}ms</span>
+        +
+        <span style="color:#5c5">CPU ${cpuAvg.toFixed(1)}ms</span>
+        = <b>${totalAvg.toFixed(1)}ms</b>
+        <span style="color:#888">(≈ ${fpsEff.toFixed(1)} fps effective)</span>
+        ${gpuBar}
+      </div>
+    ` : ''}
+  `;
+}
+
+function renderRatioBar(gpuMs, cpuMs) {
+  const total = gpuMs + cpuMs;
+  if (total <= 0) return '';
+  const gpuPct = (gpuMs / total) * 100;
+  const cpuPct = (cpuMs / total) * 100;
+  return `
+    <div style="display:inline-flex;width:200px;height:5px;margin-left:8px;vertical-align:middle;border-radius:2px;overflow:hidden;background:#1a1a1e">
+      <div style="width:${gpuPct}%;background:#5af" title="GPU ${gpuPct.toFixed(0)}%"></div>
+      <div style="width:${cpuPct}%;background:#5c5" title="CPU ${cpuPct.toFixed(0)}%"></div>
+    </div>
+  `;
+}
+
+function renderTable(data) {
+  renderVersion(data.version);
+  renderWorkerInfo(data.worker);
+  const jobs = [...data.jobs].sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+
+  const counts = { running: 0, queued: 0, cancelling: 0, done: 0, failed: 0, cancelled: 0 };
+  for (const j of jobs) counts[j.status] = (counts[j.status] ?? 0) + 1;
+
+  summaryEl.innerHTML = `
+    ${jobs.length} total
+    <span class="dot running"></span>${counts.running} running
+    <span class="dot queued"></span>${counts.queued} queued
+    ${counts.cancelling ? `<span class="dot cancelling"></span>${counts.cancelling} cancelling` : ''}
+    <span class="dot done"></span>${counts.done} done
+    <span class="dot failed"></span>${counts.failed} failed
+    ${counts.cancelled ? `<span class="dot cancelled"></span>${counts.cancelled} cancelled` : ''}
+  `;
+  cancelQueuedBtn.disabled  = counts.queued === 0;
+  clearFinishedBtn.disabled = (counts.done + counts.failed + counts.cancelled) === 0;
+
+  if (!jobs.length) {
+    container.innerHTML = `<div class="empty">No jobs yet. Submit one from the main page.</div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>id</th>
+        <th>coords</th>
+        <th>size</th>
+        <th>status</th>
+        <th class="progress-cell">progress</th>
+        <th>timing</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${jobs.map(jobRow).join('')}
+      </tbody>
+    </table>
+  `;
+
+  for (const btn of container.querySelectorAll('[data-action]')) {
+    btn.addEventListener('click', onRowAction);
+  }
+}
+
+function jobRow(j) {
+  const pct = ((j.progress ?? 0) * 100).toFixed(1);
+  const fillCls = ['running','queued'].includes(j.status) ? '' : j.status;
+  const canDownload = j.status === 'done';
+  // "cancelling" is a transient state: worker is draining; delete makes no
+  // sense yet, but showing a disabled "cancelling…" button makes it clear
+  // the request was accepted.
+  const isCancelling = j.status === 'cancelling';
+  const canDelete = j.status !== 'running' && !isCancelling;
+  const canCancel = j.status === 'queued' || j.status === 'running';
+  const error = j.error
+    ? `<div class="error">${escapeHtml(j.error)}</div>`
+    : '';
+  return `
+    <tr>
+      <td class="id">${j.id.slice(0, 8)}</td>
+      <td class="coords"><pre style="margin:0;white-space:pre">${escapeHtml(fmtCoords(j.request))}</pre></td>
+      <td>${escapeHtml(fmtSize(j.request))}</td>
+      <td class="status ${j.status}">${j.status}</td>
+      <td class="progress-cell">
+        <div class="progress-bar"><div class="progress-fill ${fillCls}" style="width:${pct}%"></div></div>
+        <div class="progress-label">${j.frames_done ?? 0}/${j.frames_total ?? 0} (${pct}%)</div>
+        ${error}
+      </td>
+      <td>
+        <div>${fmtAge(j.created_at)}</div>
+        <div style="color:#666;font-size:11px">${fmtDuration(j)}</div>
+      </td>
+      <td class="actions">
+        ${canDownload ? `<a class="btn" href="${BASE}/download/${j.id}" download>download</a>` : ''}
+        ${canCancel   ? `<button class="btn danger" data-action="cancel" data-id="${j.id}">cancel</button>` : ''}
+        ${isCancelling ? `<button class="btn" disabled>cancelling…</button>` : ''}
+        ${canDelete && !canCancel ? `<button class="btn danger" data-action="delete" data-id="${j.id}">delete</button>` : ''}
+      </td>
+    </tr>
+  `;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+}
+
+async function onRowAction(e) {
+  const btn = e.currentTarget;
+  const id = btn.dataset.id;
+  const action = btn.dataset.action;
+  btn.disabled = true;
+  // Immediate visual feedback — swap the button label so the user sees their
+  // click registered even before the server transitions through the async
+  // cancel flow (server returns "cancelling", the worker takes several
+  // seconds to drain inflight frames before flipping to "cancelled").
+  if (action === 'cancel') btn.textContent = 'cancelling…';
+  try {
+    await deleteJob(id);
+    toast(`${action === 'cancel' ? 'cancel requested' : 'deleted'} ${id.slice(0, 8)}`);
+    await tick();
+  } catch (err) {
+    toast(`failed: ${err.message}`, 'err');
+    btn.disabled = false;
+    if (action === 'cancel') btn.textContent = 'cancel';
+  }
+}
+
+cancelQueuedBtn.addEventListener('click', async () => {
+  const data = await fetchJobs();
+  const queued = data.jobs.filter(j => j.status === 'queued');
+  if (!queued.length) return;
+  if (!confirm(`cancel ${queued.length} queued job(s)?`)) return;
+  for (const j of queued) {
+    try { await deleteJob(j.id); } catch {}
+  }
+  toast(`cancelled ${queued.length} queued`);
+  await tick();
+});
+
+clearFinishedBtn.addEventListener('click', async () => {
+  const data = await fetchJobs();
+  const done = data.jobs.filter(j => ['done','failed','cancelled'].includes(j.status));
+  if (!done.length) return;
+  if (!confirm(`delete ${done.length} finished job(s)? mp4 files on disk will be removed.`)) return;
+  for (const j of done) {
+    try { await deleteJob(j.id); } catch {}
+  }
+  toast(`cleared ${done.length} finished`);
+  await tick();
+});
+
+document.getElementById('refresh').addEventListener('click', tick);
+
+async function tick() {
+  try {
+    const data = await fetchJobs();
+    renderTable(data);
+  } catch (err) {
+    summaryEl.textContent = `error: ${err.message}`;
+  }
+}
+
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

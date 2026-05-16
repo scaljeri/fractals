@@ -1,0 +1,34 @@
+# Caddy reverse-proxy config for mandelbrot.calje.eu
+#
+# Serves the static browser app and proxies /gpu/* to the Jetson render
+# service when available. Copy to /etc/caddy/Caddyfile (or include as needed)
+# and replace <jetson-ip> with the actual LAN / tailscale address.
+#
+# Reload with:  sudo systemctl reload caddy
+
+mandelbrot.calje.eu {
+    # Static browser app — point at wherever you deploy index.html + main.js.
+    root * /var/www/mandelbrot
+    file_server
+
+    # Jetson render service — reverse-proxied under /gpu so the browser sees
+    # it on the same origin (no CORS pre-flight, cookies / auth stay scoped).
+    # If the Jetson is offline the proxy will 502; the browser health-check
+    # hides the "jetson" button accordingly.
+    handle_path /gpu/* {
+        reverse_proxy <jetson-ip>:8080 {
+            # Long-lived uploads/downloads: don't time out large mp4 transfers.
+            transport http {
+                read_timeout 1h
+                write_timeout 1h
+            }
+            # Forward original host / scheme so the backend can build proper URLs.
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Host {host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Compress everything except video (already compressed)
+    encode gzip
+}

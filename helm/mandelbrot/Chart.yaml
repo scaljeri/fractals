@@ -1,0 +1,9 @@
+apiVersion: v2
+name: mandelbrot
+description: Mandelbrot WebGPU explorer + optional Jetson render-service proxy
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://mandelbrot.calje.eu
+maintainers:
+  - name: luca

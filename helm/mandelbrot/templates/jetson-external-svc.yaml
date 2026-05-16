@@ -1,0 +1,18 @@
+{{- if .Values.jetson.externalHost }}
+# Maps the external Jetson hostname into the cluster as an ExternalName service.
+# Traefik (or any ingress) can then treat it as a regular in-cluster backend.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mandelbrot.fullname" . }}-jetson
+  labels:
+    {{- include "mandelbrot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jetson-proxy
+spec:
+  type: ExternalName
+  externalName: {{ .Values.jetson.externalHost | quote }}
+  ports:
+    - port: {{ .Values.jetson.externalPort }}
+      protocol: TCP
+      name: http
+{{- end }}
