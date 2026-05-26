@@ -115,9 +115,16 @@ function decimalToQD(d) {
 
 // ---------- Reference point picker ----------
 
-function countOrbitLen(cxDD, cyDD, maxIter) {
-  let z = [0, 0, 0, 0];
-  const c = [cxDD[0], cxDD[1], cyDD[0], cyDD[1]];
+// kind: 'mandelbrot' (z₀ = 0, c = ref) | 'julia' (z₀ = ref, c = juliaC).
+function countOrbitLen(refCxDD, refCyDD, maxIter, kind = 'mandelbrot', juliaCxDD = null, juliaCyDD = null) {
+  let z, c;
+  if (kind === 'julia') {
+    z = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+    c = [juliaCxDD[0], juliaCxDD[1], juliaCyDD[0], juliaCyDD[1]];
+  } else {
+    z = [0, 0, 0, 0];
+    c = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+  }
   for (let i = 0; i < maxIter; i++) {
     if (z[0] * z[0] + z[2] * z[2] > 256.0) return i;
     z = cddAdd(cddSqr(z), c);
@@ -125,9 +132,9 @@ function countOrbitLen(cxDD, cyDD, maxIter) {
   return maxIter;
 }
 
-function findReference(viewCxDD, viewCyDD, scale, aspect, maxIter, deepSearch) {
+function findReference(viewCxDD, viewCyDD, scale, aspect, maxIter, deepSearch, kind = 'mandelbrot', juliaCxDD = null, juliaCyDD = null) {
   let bestOx = 0, bestOy = 0;
-  let bestLen = countOrbitLen(viewCxDD, viewCyDD, maxIter);
+  let bestLen = countOrbitLen(viewCxDD, viewCyDD, maxIter, kind, juliaCxDD, juliaCyDD);
   let bestRadiusMul = 0;
   if (bestLen >= maxIter) return { ox: 0, oy: 0, len: bestLen, gridSize: 1, radii: [0], deepSearch: !!deepSearch };
 
@@ -152,7 +159,7 @@ function findReference(viewCxDD, viewCyDD, scale, aspect, maxIter, deepSearch) {
         const oy = v * scale * 0.98 * radiusMul;
         const cxDD = ddAdd(viewCxDD, [ox, 0]);
         const cyDD = ddAdd(viewCyDD, [oy, 0]);
-        const len = countOrbitLen(cxDD, cyDD, maxIter);
+        const len = countOrbitLen(cxDD, cyDD, maxIter, kind, juliaCxDD, juliaCyDD);
         candidatesTried++;
         if (len > bestLen) {
           bestLen = len;
@@ -180,9 +187,16 @@ function findReference(viewCxDD, viewCyDD, scale, aspect, maxIter, deepSearch) {
 //   - QD-f64 (8 doubles/iter, 4 re + 4 im) for the CPU QD-f64 path (10^31+).
 // scratchQD may be null when QD storage isn't needed, in which case we skip
 // the per-iteration write to save time (it's the most expensive of the three).
-function iterateOrbitDD(refCxDD, refCyDD, maxIter, scratchTD, scratchDD, scratchQD) {
-  let z = [0, 0, 0, 0];
-  const c = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+function iterateOrbitDD(refCxDD, refCyDD, maxIter, scratchTD, scratchDD, scratchQD, kind = 'mandelbrot', juliaCxDD = null, juliaCyDD = null) {
+  // Mandelbrot: z₀ = 0, c = ref. Julia: z₀ = ref, c = juliaC (fixed).
+  let z, c;
+  if (kind === 'julia') {
+    z = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+    c = [juliaCxDD[0], juliaCxDD[1], juliaCyDD[0], juliaCyDD[1]];
+  } else {
+    z = [0, 0, 0, 0];
+    c = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+  }
   let n = 0;
   for (let i = 0; i < maxIter; i++) {
     const zr = ddToF32TD(z[0], z[1]);
@@ -205,10 +219,20 @@ function iterateOrbitDD(refCxDD, refCyDD, maxIter, scratchTD, scratchDD, scratch
   return n;
 }
 
-function iterateOrbitDecimal(refCxDec, refCyDec, maxIter, scratchTD, scratchDD, scratchQD) {
+function iterateOrbitDecimal(refCxDec, refCyDec, maxIter, scratchTD, scratchDD, scratchQD, kind = 'mandelbrot', juliaCxDec = null, juliaCyDec = null) {
   const TWO = new Decimal(2);
-  let zr = new Decimal(0);
-  let zi = new Decimal(0);
+  let zr, zi, cReDec, cImDec;
+  if (kind === 'julia') {
+    zr = refCxDec;
+    zi = refCyDec;
+    cReDec = juliaCxDec;
+    cImDec = juliaCyDec;
+  } else {
+    zr = new Decimal(0);
+    zi = new Decimal(0);
+    cReDec = refCxDec;
+    cImDec = refCyDec;
+  }
   let n = 0;
   for (let i = 0; i < maxIter; i++) {
     const [zra, zrb, zrc] = decimalToTD(zr);
@@ -232,8 +256,8 @@ function iterateOrbitDecimal(refCxDec, refCyDec, maxIter, scratchTD, scratchDD, 
     if (zrN * zrN + ziN * ziN > 256.0) break;
     const zr2 = zr.times(zr);
     const zi2 = zi.times(zi);
-    const newZr = zr2.minus(zi2).plus(refCxDec);
-    const newZi = zr.times(zi).times(TWO).plus(refCyDec);
+    const newZr = zr2.minus(zi2).plus(cReDec);
+    const newZi = zr.times(zi).times(TWO).plus(cImDec);
     zr = newZr; zi = newZi;
   }
   return n;
@@ -244,9 +268,10 @@ function iterateOrbitDecimal(refCxDec, refCyDec, maxIter, scratchTD, scratchDD, 
 console.log('[orbit-worker] booted');
 
 self.addEventListener('message', (ev) => {
-  const { id, viewCxStr, viewCyStr, scale, aspect, maxIter, deepSearch } = ev.data;
+  const { id, viewCxStr, viewCyStr, scale, aspect, maxIter, deepSearch, kind, juliaReStr, juliaImStr } = ev.data;
   const t0 = performance.now();
-  console.log(`[orbit-worker] req#${id} start: scale=${scale.toExponential(2)} maxIter=${maxIter}${deepSearch ? ' DEEP-SEARCH (7×7 grid × 3 radii)' : ''}`);
+  const fractalKind = kind === 'julia' ? 'julia' : 'mandelbrot';
+  console.log(`[orbit-worker] req#${id} start: kind=${fractalKind} scale=${scale.toExponential(2)} maxIter=${maxIter}${deepSearch ? ' DEEP-SEARCH (7×7 grid × 3 radii)' : ''}` + (fractalKind === 'julia' ? ` julia_c=${juliaReStr}+${juliaImStr}i` : ''));
 
   // Decimal precision tracks the zoom depth + margin for iteration-error
   // amplification (≈log10(max_iter)/0.3 ≈ 5-6 digits for 50k iters, plus a
@@ -261,12 +286,18 @@ self.addEventListener('message', (ev) => {
   const viewCxDD = decimalToDD(viewCxDec);
   const viewCyDD = decimalToDD(viewCyDec);
 
+  // Julia-c is a per-render constant — same Decimal precision as everything else.
+  const juliaCxDec = fractalKind === 'julia' ? new Decimal(juliaReStr ?? '0') : null;
+  const juliaCyDec = fractalKind === 'julia' ? new Decimal(juliaImStr ?? '0') : null;
+  const juliaCxDD = juliaCxDec ? decimalToDD(juliaCxDec) : null;
+  const juliaCyDD = juliaCyDec ? decimalToDD(juliaCyDec) : null;
+
   // findReference only needs DD precision: it's a coarse grid search to pick
   // a candidate that escapes late. At deep zoom the grid points collapse to
   // the view center in DD and findReference returns ox=oy=0, which is fine —
   // the view center itself is a fine reference at that depth.
   const refT0 = performance.now();
-  const ref = findReference(viewCxDD, viewCyDD, scale, aspect, maxIter, deepSearch);
+  const ref = findReference(viewCxDD, viewCyDD, scale, aspect, maxIter, deepSearch, fractalKind, juliaCxDD, juliaCyDD);
   if (deepSearch) {
     console.log(`[orbit-worker] req#${id} deepSearch result: bestLen=${ref.len} (tried ${ref.candidatesTried} candidates at radii [${ref.radii.join(',')}]× viewport, found at radiusMul=${ref.bestRadiusMul ?? 0}) in ${(performance.now() - refT0).toFixed(0)}ms`);
   }
@@ -290,11 +321,11 @@ self.addEventListener('message', (ev) => {
   if (zoomDigits < 12) {
     const refCxDD = decimalToDD(refCxDec);
     const refCyDD = decimalToDD(refCyDec);
-    console.log(`[orbit-worker] req#${id} iterating DD (zoomDigits=${zoomDigits}, refLen=${ref.len}, wantQD=${wantQD})`);
-    n = iterateOrbitDD(refCxDD, refCyDD, ref.len, scratchTD, scratchDD, scratchQD);
+    console.log(`[orbit-worker] req#${id} iterating DD (kind=${fractalKind}, zoomDigits=${zoomDigits}, refLen=${ref.len}, wantQD=${wantQD})`);
+    n = iterateOrbitDD(refCxDD, refCyDD, ref.len, scratchTD, scratchDD, scratchQD, fractalKind, juliaCxDD, juliaCyDD);
   } else {
-    console.log(`[orbit-worker] req#${id} iterating Decimal at precision ${precision} (zoomDigits=${zoomDigits}, refLen=${ref.len}, wantQD=${wantQD})`);
-    n = iterateOrbitDecimal(refCxDec, refCyDec, ref.len, scratchTD, scratchDD, scratchQD);
+    console.log(`[orbit-worker] req#${id} iterating Decimal at precision ${precision} (kind=${fractalKind}, zoomDigits=${zoomDigits}, refLen=${ref.len}, wantQD=${wantQD})`);
+    n = iterateOrbitDecimal(refCxDec, refCyDec, ref.len, scratchTD, scratchDD, scratchQD, fractalKind, juliaCxDec, juliaCyDec);
   }
 
   // Trim and transfer ownership so the main thread uploads without copying.

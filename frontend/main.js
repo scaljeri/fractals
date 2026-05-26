@@ -39,6 +39,21 @@ struct Uniforms {
   _pad7: f32,
   palette_d: vec3<f32>,    // offset 128
   _pad8: f32,
+  // kind: 0 = Mandelbrot (z₀ = 0, c per pixel),
+  //       1 = Julia (z₀ per pixel, c = julia_c fixed).
+  // The iteration rule z := z² + c is identical; what differs is which
+  // parameter varies per pixel and (for perturbation) whether the +δc
+  // term applies — for Julia δc = 0 since c is identical for every pixel.
+  // Layout: scalars only to keep alignment trivial (4-byte). Struct total
+  // ends on a 16-byte boundary so the UBO buffer is 176 bytes.
+  kind: u32,               // offset 144
+  _pad9a: u32,             // offset 148
+  julia_re: f32,           // offset 152 — re(julia_c) for Julia mode
+  julia_im: f32,           // offset 156 — im(julia_c) for Julia mode
+  escape_radius_sq: f32,   // offset 160 — bailout², user-configurable (default 65536 = 256²)
+  _pad9c: f32,             // offset 164
+  _pad9d: f32,             // offset 168
+  _pad9e: f32,             // offset 172
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -162,19 +177,31 @@ fn fs_direct(uv: vec2<f32>, aspect: f32) -> vec4<f32> {
   let pxl_dx_m = td_mul_f32(aspect_scale_m, uv.x);
   let pxl_dy_m = td_mul_f32(u.scale_m, uv.y);
   // In direct mode, delta_re_m carries view.cx (mantissa form); add the
-  // per-pixel offset to get c_pixel mantissa, then reconstruct at exp 0.
-  let cx_m = td_add(u.delta_re_m, pxl_dx_m);
-  let cy_m = td_add(u.delta_im_m, pxl_dy_m);
-  let cx = ldexp(cx_m.x, u.frame_exp) + ldexp(cx_m.y, u.frame_exp) + ldexp(cx_m.z, u.frame_exp);
-  let cy = ldexp(cy_m.x, u.frame_exp) + ldexp(cy_m.y, u.frame_exp) + ldexp(cy_m.z, u.frame_exp);
-  var zr: f32 = 0.0;
-  var zi: f32 = 0.0;
+  // per-pixel offset to get the canvas-pixel complex coord, then reconstruct at exp 0.
+  let pxl_re_m = td_add(u.delta_re_m, pxl_dx_m);
+  let pxl_im_m = td_add(u.delta_im_m, pxl_dy_m);
+  let pxl_re = ldexp(pxl_re_m.x, u.frame_exp) + ldexp(pxl_re_m.y, u.frame_exp) + ldexp(pxl_re_m.z, u.frame_exp);
+  let pxl_im = ldexp(pxl_im_m.x, u.frame_exp) + ldexp(pxl_im_m.y, u.frame_exp) + ldexp(pxl_im_m.z, u.frame_exp);
+
+  // Mandelbrot: z₀ = 0, c = canvas pixel. Julia: z₀ = canvas pixel, c = u.julia_c.
+  // The iteration body is identical — both compute z := z² + c.
+  var cx: f32;
+  var cy: f32;
+  var zr: f32;
+  var zi: f32;
+  if (u.kind == 1u) {
+    zr = pxl_re; zi = pxl_im;
+    cx = u.julia_re; cy = u.julia_im;
+  } else {
+    zr = 0.0; zi = 0.0;
+    cx = pxl_re; cy = pxl_im;
+  }
   var i: u32 = 0u;
   var escaped = false;
   loop {
     if (i >= u.max_iter) { break; }
     let zz = zr * zr + zi * zi;
-    if (zz > 65536.0) { escaped = true; break; }
+    if (zz > u.escape_radius_sq) { escaped = true; break; }
     let nzr = zr * zr - zi * zi + cx;
     let nzi = 2.0 * zr * zi + cy;
     zr = nzr; zi = nzi;
@@ -207,10 +234,20 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
   let delta_im_m = td_add(u.delta_im_m, pxl_dy_m);
   let delta_exp  = u.frame_exp;
 
-  // w initialised to 0. w_exp starts aligned with delta so the first non-zero iterate
-  // (w_1 = δ) sits naturally at the right scale with no alignment shift.
-  var w_re: vec3<f32> = vec3<f32>(0.0);
-  var w_im: vec3<f32> = vec3<f32>(0.0);
+  // Init for w:
+  //   Mandelbrot: w₀ = 0 (both pixel and ref orbits start at 0).
+  //   Julia:      w₀ = δz (pixel orbit starts at view-pixel; ref at view-centre).
+  // w_exp starts aligned with delta so the first iterate sits naturally at
+  // the right scale with no alignment shift.
+  var w_re: vec3<f32>;
+  var w_im: vec3<f32>;
+  if (u.kind == 1u) {
+    w_re = delta_re_m;
+    w_im = delta_im_m;
+  } else {
+    w_re = vec3<f32>(0.0);
+    w_im = vec3<f32>(0.0);
+  }
   var w_exp: i32 = delta_exp;
   var ref_i: u32 = 0u;
   var actual_i: u32 = 0u;
@@ -232,7 +269,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let Z_im = z.im.x + w_im_actual;
 
     let zz = Z_re * Z_re + Z_im * Z_im;
-    if (zz > 65536.0) {
+    if (zz > u.escape_radius_sq) {
       escaped = true;
       Zfinal_re = Z_re;
       Zfinal_im = Z_im;
@@ -251,6 +288,15 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
       let w_im_at0 = td_ldexp(w_im, w_exp);
       w_re = td_add(z.re, w_re_at0);
       w_im = td_add(z.im, w_im_at0);
+      // After rebase, w should be (z_actual − Z[0]) in the new reference frame.
+      // Mandelbrot has Z[0] = 0 so the subtract is a no-op (skipped). Julia has
+      // Z[0] = z_ref, so omitting this subtract leaks z_ref into w every rebase
+      // and degrades precision after just a few cycles.
+      if (u.kind == 1u) {
+        let z0 = load_orbit(0u);
+        w_re = td_sub(w_re, z0.re);
+        w_im = td_sub(w_im, z0.im);
+      }
       w_exp = 0;
       ref_i = 0u;
       continue;
@@ -272,11 +318,20 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let term1_im = td_ldexp(two_zw_im, w_exp - target_exp);
     let term2_re = td_ldexp(w_sq_re, 2 * w_exp - target_exp);
     let term2_im = td_ldexp(w_sq_im, 2 * w_exp - target_exp);
-    let term3_re = td_ldexp(delta_re_m, delta_exp - target_exp);
-    let term3_im = td_ldexp(delta_im_m, delta_exp - target_exp);
 
-    var new_w_re = td_add(td_add(term1_re, term2_re), term3_re);
-    var new_w_im = td_add(td_add(term1_im, term2_im), term3_im);
+    // Mandelbrot: w_{n+1} = 2zw + w² + δc (δc per pixel).
+    // Julia:      w_{n+1} = 2zw + w²     (δc = 0, c is identical for ref & pixel).
+    var new_w_re: vec3<f32>;
+    var new_w_im: vec3<f32>;
+    if (u.kind == 1u) {
+      new_w_re = td_add(term1_re, term2_re);
+      new_w_im = td_add(term1_im, term2_im);
+    } else {
+      let term3_re = td_ldexp(delta_re_m, delta_exp - target_exp);
+      let term3_im = td_ldexp(delta_im_m, delta_exp - target_exp);
+      new_w_re = td_add(td_add(term1_re, term2_re), term3_re);
+      new_w_im = td_add(td_add(term1_im, term2_im), term3_im);
+    }
     var new_w_exp = target_exp;
 
     // Renormalise so mantissa peak sits in [1, 2). No-op when already normalised.
@@ -350,6 +405,24 @@ const PRESETS = {
   'galaxies':              { name: 'Galaxies',              cx: '0.452721018749286',      cy: '0.39649427698014',        scale: 1.1859210000000005e-13 },
   'tante-renate':          { name: "Tante Renate's spot",   cx: '-0.7746806106269039',    cy: '-0.1374168856037867',     scale: 1.506043553756164e-12 },
   'm23-2':                 { name: 'Misiurewicz M₂₃,₂',     cx: '-0.77568377',             cy: '0.13646737',              scale: 5e-4 },
+
+  // ---- Julia presets: each is a `c` value that produces a famous K_c. ----
+  // Selecting one switches kind→julia, updates view.juliaC, and resets the
+  // viewport to the per-kind HOME so the whole set is visible. Then zoom in
+  // by clicking — the deep-zoom engine handles it identically to Mandelbrot.
+  'julia-basilica':        { name: 'Basilica (c = −1)',                kind: 'julia', juliaRe: '-1.0',         juliaIm: '0.0' },
+  'julia-san-marco':       { name: 'San Marco (c = −0.75)',            kind: 'julia', juliaRe: '-0.75',        juliaIm: '0.0' },
+  'julia-dendrite':        { name: 'Dendrite (c = i)',                 kind: 'julia', juliaRe: '0.0',          juliaIm: '1.0' },
+  'julia-rabbit':          { name: "Douady's Rabbit (period 3)",       kind: 'julia', juliaRe: '-0.122',       juliaIm: '0.745' },
+  'julia-cauliflower':     { name: 'Cauliflower (rabbit cousin)',      kind: 'julia', juliaRe: '-0.7',         juliaIm: '0.27015' },
+  'julia-siegel':          { name: 'Siegel disk',                      kind: 'julia', juliaRe: '-0.391',       juliaIm: '-0.587' },
+  'julia-spirals':         { name: 'Galaxy spirals',                   kind: 'julia', juliaRe: '-0.835',       juliaIm: '-0.2321' },
+  'julia-frost':           { name: 'Frost (deep dendrite)',            kind: 'julia', juliaRe: '-0.74543',     juliaIm: '0.11301' },
+  'julia-lace':            { name: 'Lace',                             kind: 'julia', juliaRe: '-0.54',        juliaIm: '0.54' },
+  'julia-tendrils':        { name: 'Tendrils',                         kind: 'julia', juliaRe: '0.285',        juliaIm: '0.485' },
+  'julia-storm':           { name: 'Storm',                            kind: 'julia', juliaRe: '-0.7269',      juliaIm: '0.1889' },
+  'julia-airplane':        { name: 'Airplane (period 3 real)',         kind: 'julia', juliaRe: '-1.7549',      juliaIm: '0.0' },
+  'julia-icefractal':      { name: 'Lacy spirals (icefractal pick)',   kind: 'julia', juliaRe: '-0.38',        juliaIm: '0.61' },
 };
 const presetSelect = document.getElementById('presets');
 // Render-width override. "auto" = zoom-aware default (full canvas at shallow
@@ -448,8 +521,10 @@ if (presetSelect) {
     const key = presetSelect.value;
     if (!key) return;
     const p = PRESETS[key];
-    if (!p) {
-      console.warn(`[presets] unknown key: ${key}`);
+    if (!p || p.kind === 'julia') {
+      // Defensive: Julia keys aren't in this dropdown anymore, but ignore
+      // anyway in case the option set drifts.
+      console.warn(`[presets] '${key}' not a Mandelbrot preset — ignoring`);
       presetSelect.value = '';
       return;
     }
@@ -468,11 +543,38 @@ if (presetSelect) {
     // I navigated to". If the user later pans / types new coords, the
     // dropdown becomes a stale label but is harmless.
     if (typeof updateHUD === 'function') updateHUD();
-    // Use pokeCoordMarker (not updateCoordMarker) so the marker is surfaced
-    // and highlighted on preset-select, even if it was hidden by the
-    // auto-hide timer. updateCoordMarker only repositions an already-visible
-    // marker, which would do nothing at this point.
     if (typeof pokeCoordMarker === 'function') pokeCoordMarker();
+    if (typeof progressiveRender === 'function') progressiveRender();
+  });
+}
+
+// Julia preset dropdown — separate from the Mandelbrot presets so the user
+// never has to scroll past one set to reach the other. Selecting an entry
+// applies the c value, resets the viewport to Julia's HOME (so the whole K_c
+// is in frame), and invalidates the orbit cache.
+const juliaPresetSelect = document.getElementById('julia-presets');
+if (juliaPresetSelect) {
+  juliaPresetSelect.addEventListener('change', () => {
+    const key = juliaPresetSelect.value;
+    if (!key) return;
+    const p = PRESETS[key];
+    if (!p || p.kind !== 'julia') {
+      console.warn(`[presets] '${key}' not a Julia preset — ignoring`);
+      juliaPresetSelect.value = '';
+      return;
+    }
+    console.log(`[presets] julia '${p.name}' c=${p.juliaRe}+${p.juliaIm}i (viewport reset to home, orbit cache invalidated)`);
+    view.juliaC = { re: parseFloat(p.juliaRe), im: parseFloat(p.juliaIm) };
+    const jhome = HOME_BY_KIND.julia;
+    view.cx = jhome.cx; view.cy = jhome.cy; view.scale = jhome.scale;
+    qualityLevel = 0;
+    invalidateOrbitCache();
+    syncJuliaCInputs();
+    if (typeof updatePickerMarker === 'function') updatePickerMarker();
+    if (typeof updateOrbitForCurrentC === 'function') updateOrbitForCurrentC();
+    if (typeof updateHUD === 'function') updateHUD();
+    updateCoordInputsFromView();
+    updateCoordMarker();
     if (typeof progressiveRender === 'function') progressiveRender();
   });
 }
@@ -486,6 +588,16 @@ const PALETTES = {
   ocean:    { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [1.0, 1.0, 1.0], d: [0.30, 0.20, 0.20] },
   electric: { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [2.0, 1.0, 0.0], d: [0.50, 0.20, 0.25] },
   rainbow:  { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [1.0, 1.0, 1.0], d: [0.00, 0.33, 0.67] },
+  // Ice — matches icefractal.com. Single slow gradient from dark navy at low
+  // smooth-iter values up to bright white at high smooth-iter, with the phase
+  // tuned so the typical t-range (≈4 → 40) maps cleanly to that arc. Tiny
+  // frequency (0.014) means the palette barely starts a second cycle even
+  // past 10⁶ iterations — visible boundary stays a single icy trail instead
+  // of the rainbow banding that comes from c=1 palettes.
+  //   cos(2π·(0.014·t + 0.44)) ranges from −1 at t≈4 → +1 at t≈40.
+  //   at cos = −1: (a−b) = (0.00, 0.10, 0.30) — deep navy
+  //   at cos = +1: (a+b) = (1.00, 1.00, 1.00) — pure white
+  ice:      { a: [0.50, 0.55, 0.65], b: [0.50, 0.45, 0.35], c: [0.014, 0.014, 0.014], d: [0.44, 0.44, 0.44] },
 };
 function currentPalette() { return PALETTES[paletteEl.value] || PALETTES.warm; }
 
@@ -586,7 +698,7 @@ function blitUpscale(srcTexture, displayTex) {
   }
 }
 
-const UBO_SIZE = 144;
+const UBO_SIZE = 176;
 const uniformBuffer = device.createBuffer({
   size: UBO_SIZE,
   usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -746,12 +858,99 @@ const bindGroup = device.createBindGroup({
 // the center is the classic seahorse-valley target so the user lands on
 // something visually interesting on first load. Matches the default
 // re/im inputs in index.html.
-const HOME = {
-  cx: new Decimal('-0.743643887037151'),
-  cy: new Decimal('0.131825904205330'),
-  scale: 1.3,
+// HOME-per-kind: when the user resets, they land on the canonical view for
+// the active fractal. Mandelbrot starts on Misiurewicz M₂₃,₂; Julia starts
+// centred on the origin (the natural |z| < 2 viewport for any K_c).
+const HOME_BY_KIND = {
+  mandelbrot: {
+    cx: new Decimal('-0.743643887037151'),
+    cy: new Decimal('0.131825904205330'),
+    scale: 1.3,
+  },
+  julia: {
+    cx: new Decimal('0'),
+    cy: new Decimal('0'),
+    scale: 1.5,
+  },
 };
-const view = { cx: HOME.cx, cy: HOME.cy, scale: HOME.scale };
+
+// Active fractal kind. Parsed from the URL (?kind=julia&jre=...&jim=...) on
+// boot. Julia-c lives on view because it's a per-render parameter the GPU
+// shader, CPU kernel, and orbit worker all read directly.
+const urlParams = new URLSearchParams(location.search);
+const initialKind = urlParams.get('kind') === 'julia' ? 'julia' : 'mandelbrot';
+const HOME = HOME_BY_KIND[initialKind];
+
+// Parse Julia c from URL with a sane default. Default sits near the boundary
+// between the main cardioid and the period-3 bulb (icefractal.com's picker
+// lands here at a click) — produces the dense, lacy Julia image with paired
+// spiral lobes that's the most visually-rich "default-looking" Julia. Override
+// via ?jre=…&jim=… or via the c-inputs in the UI.
+function parseJuliaC() {
+  const jre = parseFloat(urlParams.get('jre'));
+  const jim = parseFloat(urlParams.get('jim'));
+  return {
+    re: Number.isFinite(jre) ? jre : -0.38,
+    im: Number.isFinite(jim) ? jim : 0.61,
+  };
+}
+
+// Escape radius — the "bailout" beyond which the iteration is declared
+// divergent. Standard choices: 2 (mathematical minimum for z²+c), 4, 16,
+// 256 (our long-standing default — generous, gives smooth gradients in the
+// outer halo). The shape of the set is unchanged; only the smooth-coloring
+// shape near the boundary depends on this. Squared form (R²) stored so the
+// shader does one compare instead of a sqrt per iter.
+const DEFAULT_ESCAPE_RADIUS = 256;
+function parseEscapeRadius() {
+  const r = parseFloat(urlParams.get('esc'));
+  if (!Number.isFinite(r) || r < 1) return DEFAULT_ESCAPE_RADIUS;
+  return Math.min(1e6, r);
+}
+
+// User override for max iterations per pixel. null = use the zoom-adaptive
+// computeMaxIter() default. Any finite positive integer (clamped to
+// MAX_ORBIT_LEN) overrides the adaptive value. Override survives in the URL
+// via ?iter=…
+function parseMaxIterOverride() {
+  const n = parseInt(urlParams.get('iter'), 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n;
+}
+
+const view = {
+  kind: initialKind,
+  cx: HOME.cx,
+  cy: HOME.cy,
+  scale: HOME.scale,
+  juliaC: parseJuliaC(),
+  escapeRadius: parseEscapeRadius(),
+  maxIterOverride: parseMaxIterOverride(),
+};
+console.log(`[boot] kind=${view.kind} home=${HOME.cx}+${HOME.cy}i scale=${HOME.scale}` + (view.kind === 'julia' ? ` juliaC=${view.juliaC.re}+${view.juliaC.im}i` : ''));
+if (view.kind === 'julia') {
+  document.title = 'julia · calje';
+}
+// Per-kind default palette: Julia gets the icefractal-style ice palette
+// (monotonic dark-blue → white), Mandelbrot keeps the warm cosine cycle.
+// URL ?palette=… overrides both.
+{
+  const paletteParam = urlParams.get('palette');
+  if (paletteEl) {
+    if (paletteParam && paletteEl.querySelector(`option[value="${paletteParam}"]`)) {
+      paletteEl.value = paletteParam;
+      console.log(`[boot] palette from URL: ${paletteParam}`);
+    } else if (view.kind === 'julia') {
+      paletteEl.value = 'ice';
+      console.log(`[boot] palette defaulted to 'ice' for kind=julia`);
+    }
+  }
+}
+// Set data-kind on body immediately so kind-conditional CSS (the c-picker
+// visibility, the Julia-only hotkey strip extension) is correct *before*
+// the rest of the script runs and possibly bails on an error elsewhere.
+// Done here so it doesn't depend on the picker DOM lookup succeeding later.
+document.body.dataset.kind = view.kind;
 
 function viewAddOffset(oxF64, oyF64) {
   view.cx = view.cx.plus(oxF64);
@@ -763,11 +962,18 @@ function viewAddOffset(oxF64, oyF64) {
 }
 
 function resetView() {
-  view.cx = HOME.cx; view.cy = HOME.cy; view.scale = HOME.scale;
+  const home = HOME_BY_KIND[view.kind] || HOME;
+  view.cx = home.cx; view.cy = home.cy; view.scale = home.scale;
   updateCoordMarker();
 }
 
 function computeMaxIter() {
+  // User override from the iter input or ?iter= URL param takes precedence
+  // over the zoom-adaptive default. Clamped to [16, MAX_ORBIT_LEN] so a typo
+  // can't lock the renderer at 0 (instantly black canvas) or above buffer.
+  if (Number.isFinite(view.maxIterOverride) && view.maxIterOverride >= 1) {
+    return Math.min(MAX_ORBIT_LEN, view.maxIterOverride);
+  }
   const zoomFactor = HOME.scale / view.scale;
   const log = Math.log10(Math.max(1, zoomFactor));
   // Aggressive budget — filaments near boundary need deep iteration counts.
@@ -1020,6 +1226,435 @@ for (const el of [zoomMantissaInput, zoomExpInput]) {
   });
 }
 
+// ----- Kind selector + Julia-c inputs -----
+// Switching kind resets the view to the per-kind HOME, invalidates the orbit
+// cache (kind change means a fundamentally different orbit), and re-renders.
+// Editing julia-c only invalidates the orbit cache + re-renders; the view
+// stays put so the user can compare Julias of nearby c at the same zoom.
+const kindSelectEl = document.getElementById('kind-select');
+const kindLabelEl  = document.getElementById('kind-label');
+const juliaCLabelEl = document.getElementById('julia-c-label');
+const juliaCReInput = document.getElementById('julia-c-re');
+const juliaCImInput = document.getElementById('julia-c-im');
+
+function syncJuliaCInputs() {
+  if (juliaCReInput) juliaCReInput.value = String(view.juliaC.re);
+  if (juliaCImInput) juliaCImInput.value = String(view.juliaC.im);
+}
+
+function setJuliaInputsVisible(visible) {
+  const display = visible ? '' : 'none';
+  if (juliaCLabelEl) juliaCLabelEl.style.display = display;
+  if (juliaCReInput) juliaCReInput.style.display = display;
+  if (juliaCImInput) juliaCImInput.style.display = display;
+  // Preset dropdowns are kind-specific — show only the one matching the active
+  // fractal. Mandelbrot presets pan the viewport; Julia presets set c.
+  const mandelPreset = document.getElementById('presets');
+  const juliaPreset  = document.getElementById('julia-presets');
+  if (mandelPreset) mandelPreset.style.display = visible ? 'none' : '';
+  if (juliaPreset)  juliaPreset.style.display  = visible ? ''     : 'none';
+}
+
+function invalidateOrbitCache() {
+  // Force the next render to fetch a fresh orbit — orbit content depends on
+  // kind and (for Julia) on juliaC.
+  orbitCache.len = 0;
+  orbitCache.maxIterCovered = 0;
+  orbitDirty = false;
+}
+
+function applyKindFromUI() {
+  const next = kindSelectEl?.value === 'julia' ? 'julia' : 'mandelbrot';
+  if (next === view.kind) return;
+  console.log(`[kind] switching ${view.kind} → ${next}`);
+  view.kind = next;
+  const home = HOME_BY_KIND[next];
+  view.cx = home.cx; view.cy = home.cy; view.scale = home.scale;
+  qualityLevel = 0;
+  invalidateOrbitCache();
+  setJuliaInputsVisible(next === 'julia');
+  if (kindLabelEl) kindLabelEl.textContent = next;
+  document.title = `${next} · calje`;
+  // CSS visibility hook for the c-picker (visible only in Julia mode).
+  document.body.dataset.kind = next;
+  if (typeof updatePickerMarker === 'function') updatePickerMarker();
+  if (typeof updateOrbitForCurrentC === 'function') updateOrbitForCurrentC();
+  if (typeof updateHUD === 'function') updateHUD();
+  updateCoordInputsFromView();
+  updateCoordMarker();
+  if (typeof progressiveRender === 'function') progressiveRender();
+}
+
+function applyJuliaCFromInputs() {
+  if (view.kind !== 'julia') return;
+  const re = parseFloat(juliaCReInput.value);
+  const im = parseFloat(juliaCImInput.value);
+  if (!isFinite(re) || !isFinite(im)) {
+    syncJuliaCInputs();
+    return;
+  }
+  if (re === view.juliaC.re && im === view.juliaC.im) return;
+  console.log(`[kind] julia c updated: ${view.juliaC.re}+${view.juliaC.im}i → ${re}+${im}i`);
+  view.juliaC = { re, im };
+  qualityLevel = 0;
+  invalidateOrbitCache();
+  if (typeof updatePickerMarker === 'function') updatePickerMarker();
+  if (typeof updateOrbitForCurrentC === 'function') updateOrbitForCurrentC();
+  if (typeof progressiveRender === 'function') progressiveRender();
+}
+
+if (kindSelectEl) {
+  kindSelectEl.value = view.kind;
+  kindSelectEl.addEventListener('change', applyKindFromUI);
+}
+setJuliaInputsVisible(view.kind === 'julia');
+if (kindLabelEl) kindLabelEl.textContent = view.kind;
+syncJuliaCInputs();
+
+for (const el of [juliaCReInput, juliaCImInput].filter(Boolean)) {
+  el.addEventListener('blur', applyJuliaCFromInputs);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    else if (e.key === 'Escape') { syncJuliaCInputs(); el.blur(); }
+  });
+}
+
+// ----- Escape radius input -----
+// Changing the escape radius shifts smooth-coloring shape near the boundary
+// (the set itself is unchanged). No orbit invalidate needed — the orbit
+// worker keeps its own safe-large bailout (256); only the shader & CPU
+// per-pixel escape check use the user value. requestRender redraws with the
+// new uniform value baked into the UBO.
+const escapeRadiusInput = document.getElementById('escape-radius');
+function syncEscapeRadiusInput() {
+  if (escapeRadiusInput) escapeRadiusInput.value = String(view.escapeRadius);
+}
+// `commit` distinguishes mid-typing input events (commit=false) from terminal
+// blur/Enter (commit=true). On mid-typing we never write back to the input —
+// re-assigning .value forces the cursor to the end and clobbers the user's
+// edit. We only revert on commit if the final value is invalid.
+function applyEscapeRadiusFromInput(commit) {
+  if (!escapeRadiusInput) return;
+  const raw = escapeRadiusInput.value;
+  // Accept either dot or comma as decimal separator (European locale tolerance).
+  const r = parseFloat(String(raw).replace(',', '.'));
+  if (!Number.isFinite(r) || r < 1) {
+    if (commit) {
+      console.warn(`[escape-radius] invalid input "${raw}" on commit — reverting to ${view.escapeRadius}`);
+      syncEscapeRadiusInput();
+    }
+    return;
+  }
+  const clamped = Math.min(1e6, r);
+  if (clamped === view.escapeRadius) return;
+  console.log(`[escape-radius] ${view.escapeRadius} → ${clamped} (sq=${(clamped * clamped).toFixed(0)}) — triggering re-render`);
+  view.escapeRadius = clamped;
+  // NOTE: deliberately no syncEscapeRadiusInput() here — the input already
+  // holds the user's typed value, and re-assigning .value would jump the
+  // cursor to the end mid-edit.
+  if (typeof progressiveRender === 'function') progressiveRender();
+  else if (typeof requestRender === 'function') requestRender();
+}
+if (escapeRadiusInput) {
+  syncEscapeRadiusInput();
+  escapeRadiusInput.addEventListener('input',  () => applyEscapeRadiusFromInput(false));
+  escapeRadiusInput.addEventListener('change', () => applyEscapeRadiusFromInput(true));
+  escapeRadiusInput.addEventListener('blur',   () => applyEscapeRadiusFromInput(true));
+  escapeRadiusInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter')  { e.preventDefault(); escapeRadiusInput.blur(); }
+    if (e.key === 'Escape') { syncEscapeRadiusInput(); escapeRadiusInput.blur(); }
+  });
+}
+
+// ----- Iter override input -----
+// Empty = auto (use computeMaxIter's adaptive default). Any integer ≥ 16
+// overrides the per-frame max iterations, both in the GPU shader and the
+// orbit worker (which size their loops from computeMaxIter / computeOrbitMaxIter).
+const iterOverrideInput = document.getElementById('iter-override');
+function syncIterOverrideInput() {
+  if (!iterOverrideInput) return;
+  iterOverrideInput.value = view.maxIterOverride != null ? String(view.maxIterOverride) : '';
+}
+function applyIterOverrideFromInput(commit) {
+  if (!iterOverrideInput) return;
+  const raw = iterOverrideInput.value.trim();
+  if (raw === '') {
+    if (view.maxIterOverride !== null) {
+      console.log(`[iter-override] cleared → auto (computeMaxIter() will pick the adaptive value)`);
+      view.maxIterOverride = null;
+      invalidateOrbitCache();
+      if (typeof progressiveRender === 'function') progressiveRender();
+    }
+    return;
+  }
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    if (commit) {
+      console.warn(`[iter-override] invalid input "${raw}" — reverting to ${view.maxIterOverride ?? 'auto'}`);
+      syncIterOverrideInput();
+    }
+    return;
+  }
+  const clamped = Math.min(MAX_ORBIT_LEN, n);
+  if (clamped === view.maxIterOverride) return;
+  console.log(`[iter-override] ${view.maxIterOverride ?? 'auto'} → ${clamped} (was zoom-adaptive: ${1024 + Math.round(1500 * Math.log10(Math.max(1, HOME.scale / view.scale)))})`);
+  view.maxIterOverride = clamped;
+  // Bump iter > orbit's maxIterCovered → orbit cache stale → worker refetch.
+  invalidateOrbitCache();
+  if (typeof progressiveRender === 'function') progressiveRender();
+}
+if (iterOverrideInput) {
+  syncIterOverrideInput();
+  iterOverrideInput.addEventListener('input',  () => applyIterOverrideFromInput(false));
+  iterOverrideInput.addEventListener('change', () => applyIterOverrideFromInput(true));
+  iterOverrideInput.addEventListener('blur',   () => applyIterOverrideFromInput(true));
+  iterOverrideInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter')  { e.preventDefault(); iterOverrideInput.blur(); }
+    if (e.key === 'Escape') { syncIterOverrideInput(); iterOverrideInput.blur(); }
+  });
+}
+
+// ===========================================================================
+// Julia c-picker
+// ---------------------------------------------------------------------------
+// A small static thumbnail of the Mandelbrot set, sitting in the bottom-right
+// corner when kind=julia. Clicking anywhere on it sets view.juliaC to the
+// underlying complex coord and re-renders the main Julia canvas.
+//
+// Why the picker doesn't need the deep-zoom engine: it's a fixed view of the
+// whole Mandelbrot at modest resolution (~280×220). One plain-JS render at
+// page load, takes ~30-100ms. After that it's just a click target with a
+// marker that shows the currently-selected c.
+// ===========================================================================
+const pickerCanvas = document.getElementById('julia-picker-canvas');
+const pickerMarker = document.getElementById('julia-picker-marker');
+const pickerHover  = document.getElementById('julia-picker-hover');
+const pickerCoords = document.getElementById('julia-picker-c');
+const orbitCanvas  = document.getElementById('julia-orbit-canvas');
+const orbitCtx     = orbitCanvas?.getContext('2d');
+
+// Render the iteration orbit of c under z := z² + c starting from z = 0
+// (i.e. the Mandelbrot orbit of c). When c is inside M the orbit stays bounded
+// and traces a periodic or quasi-periodic figure; when c is outside it escapes
+// quickly and the orbit shoots off to infinity, clipped by the bbox below.
+//
+// Visual: white vector strokes connecting successive z values on a black
+// background. Coordinate frame is centered on the origin with extent ±2 so
+// the full z²+c attractor fits.
+function renderOrbitForC(cRe, cIm) {
+  if (!orbitCtx) return;
+  const w = orbitCanvas.width, h = orbitCanvas.height;
+  orbitCtx.fillStyle = '#000';
+  orbitCtx.fillRect(0, 0, w, h);
+
+  // Iterate, collect points until escape or maxIter
+  const maxIter = 200;
+  const pts = [[0, 0]];
+  let zr = 0, zi = 0;
+  for (let i = 0; i < maxIter; i++) {
+    const zr2 = zr * zr, zi2 = zi * zi;
+    if (zr2 + zi2 > 4) break;
+    const nzr = zr2 - zi2 + cRe;
+    const nzi = 2 * zr * zi + cIm;
+    zr = nzr; zi = nzi;
+    pts.push([zr, zi]);
+  }
+
+  // Project complex coords to canvas pixels — origin at canvas centre, math y
+  // (positive = up). Extent ±2 so the natural |z| ≤ 2 range fits with margin.
+  const VIEW_HALF = 2;
+  const scale = Math.min(w, h) * 0.46 / VIEW_HALF;
+  const ox = w / 2, oy = h / 2;
+  const proj = (x, y) => [ox + x * scale, oy - y * scale];
+
+  // Faint origin crosshair for orientation
+  orbitCtx.strokeStyle = 'rgba(124, 255, 107, 0.18)';
+  orbitCtx.lineWidth = 0.5;
+  orbitCtx.beginPath();
+  orbitCtx.moveTo(0, oy); orbitCtx.lineTo(w, oy);
+  orbitCtx.moveTo(ox, 0); orbitCtx.lineTo(ox, h);
+  orbitCtx.stroke();
+
+  // Orbit strokes
+  orbitCtx.strokeStyle = 'rgba(242, 240, 234, 0.92)';
+  orbitCtx.lineWidth = 1.4;
+  orbitCtx.lineCap = 'round';
+  orbitCtx.lineJoin = 'round';
+  orbitCtx.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const [px, py] = proj(pts[i][0], pts[i][1]);
+    if (i === 0) orbitCtx.moveTo(px, py);
+    else orbitCtx.lineTo(px, py);
+  }
+  orbitCtx.stroke();
+
+  // Dot at z=0 (orbit start)
+  const [sx, sy] = proj(0, 0);
+  orbitCtx.fillStyle = 'rgba(124, 255, 107, 0.9)';
+  orbitCtx.beginPath();
+  orbitCtx.arc(sx, sy, 2.5, 0, Math.PI * 2);
+  orbitCtx.fill();
+}
+
+// Viewport of the picker in complex coords — shows the full Mandelbrot with
+// some padding so points just outside M (which produce interesting "dust"
+// Julias) are still reachable.
+const PICKER_VIEW = { xmin: -2.1, xmax: 0.7, ymin: -1.15, ymax: 1.15 };
+
+// Math convention: positive imaginary axis points UP. Screen pixels go top→bottom,
+// so py = 0 must map to ymax (not ymin) and vice versa.
+function pickerComplexFromPixel(px, py, w, h) {
+  const re = PICKER_VIEW.xmin + (px / w) * (PICKER_VIEW.xmax - PICKER_VIEW.xmin);
+  const im = PICKER_VIEW.ymax - (py / h) * (PICKER_VIEW.ymax - PICKER_VIEW.ymin);
+  return { re, im };
+}
+
+function pickerPixelFromComplex(re, im, w, h) {
+  const px = (re - PICKER_VIEW.xmin) / (PICKER_VIEW.xmax - PICKER_VIEW.xmin) * w;
+  const py = (PICKER_VIEW.ymax - im) / (PICKER_VIEW.ymax - PICKER_VIEW.ymin) * h;
+  return { px, py };
+}
+
+function renderPickerOnce() {
+  if (!pickerCanvas) return;
+  const ctx = pickerCanvas.getContext('2d');
+  const w = pickerCanvas.width, h = pickerCanvas.height;
+  const img = ctx.createImageData(w, h);
+  const data = img.data;
+  const maxIter = 192;
+  const t0 = performance.now();
+  for (let py = 0; py < h; py++) {
+    // Flip y so positive imaginary axis sits at the top of the canvas (math
+    // convention). Mandelbrot is symmetric across the real axis so this
+    // looks the same as the unflipped render — it only matters for the
+    // marker position to match the click position.
+    const cy = PICKER_VIEW.ymax - (py / h) * (PICKER_VIEW.ymax - PICKER_VIEW.ymin);
+    for (let px = 0; px < w; px++) {
+      const cx = PICKER_VIEW.xmin + (px / w) * (PICKER_VIEW.xmax - PICKER_VIEW.xmin);
+      const off = (py * w + px) * 4;
+      // Main cardioid + period-2 bulb skip — keeps most of M black and fast.
+      const cxm = cx - 0.25;
+      const cy2 = cy * cy;
+      const q = cxm * cxm + cy2;
+      if (q * (q + cxm) <= 0.25 * cy2) { data[off + 3] = 255; continue; }
+      const xp = cx + 1;
+      if (xp * xp + cy2 <= 0.0625) { data[off + 3] = 255; continue; }
+      let zr = 0, zi = 0;
+      let i = 0;
+      while (i < maxIter) {
+        const zr2 = zr * zr;
+        const zi2 = zi * zi;
+        if (zr2 + zi2 > 4) break;
+        zi = 2 * zr * zi + cy;
+        zr = zr2 - zi2 + cx;
+        i++;
+      }
+      if (i === maxIter) {
+        data[off + 3] = 255;            // in-set: black
+      } else {
+        // Cool blue-to-white escape gradient — keep it monochrome so the
+        // marker dot (accent green) is the eye-catcher.
+        const t = i / maxIter;
+        const v = Math.pow(t, 0.4);
+        data[off    ] = (40 + 180 * v) | 0;
+        data[off + 1] = (60 + 180 * v) | 0;
+        data[off + 2] = (120 + 130 * v) | 0;
+        data[off + 3] = 255;
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  console.log(`[julia-picker] rendered ${w}×${h} in ${(performance.now() - t0).toFixed(0)}ms`);
+}
+
+function updateOrbitForCurrentC() {
+  if (view.kind !== 'julia') return;
+  renderOrbitForC(view.juliaC.re, view.juliaC.im);
+}
+
+function updatePickerMarker() {
+  if (!pickerMarker || !pickerCanvas) return;
+  const { px, py } = pickerPixelFromComplex(
+    view.juliaC.re, view.juliaC.im,
+    pickerCanvas.clientWidth || pickerCanvas.width,
+    pickerCanvas.clientHeight || pickerCanvas.height,
+  );
+  // Only show the marker if the point is inside the picker viewport.
+  const w = pickerCanvas.clientWidth || pickerCanvas.width;
+  const h = pickerCanvas.clientHeight || pickerCanvas.height;
+  if (px < 0 || px > w || py < 0 || py > h) {
+    pickerMarker.classList.remove('active');
+  } else {
+    pickerMarker.style.left = px + 'px';
+    pickerMarker.style.top  = py + 'px';
+    pickerMarker.classList.add('active');
+  }
+  if (pickerCoords) {
+    const re = view.juliaC.re;
+    const im = view.juliaC.im;
+    pickerCoords.textContent = `${re.toFixed(4)} ${im >= 0 ? '+' : '−'} ${Math.abs(im).toFixed(4)}i`;
+  }
+}
+
+function applyJuliaCFromPicker(cssX, cssY) {
+  const rect = pickerCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  const px = cssX - rect.left, py = cssY - rect.top;
+  const { re, im } = pickerComplexFromPixel(px, py, w, h);
+  console.log(`[julia-picker] clicked (${px.toFixed(1)}, ${py.toFixed(1)}) → c = ${re.toFixed(5)} + ${im.toFixed(5)}i`);
+  view.juliaC = { re, im };
+  qualityLevel = 0;
+  invalidateOrbitCache();
+  syncJuliaCInputs();
+  updatePickerMarker();
+  updateOrbitForCurrentC();
+  if (typeof progressiveRender === 'function') progressiveRender();
+}
+
+if (pickerCanvas) {
+  pickerCanvas.addEventListener('click', (e) => applyJuliaCFromPicker(e.clientX, e.clientY));
+  // Drag-to-update: holding down the mouse and moving updates c live for a
+  // really tactile "scrub the Mandelbrot to morph the Julia" feel.
+  let pickerDragging = false;
+  pickerCanvas.addEventListener('pointerdown', (e) => {
+    pickerDragging = true;
+    pickerCanvas.setPointerCapture(e.pointerId);
+    applyJuliaCFromPicker(e.clientX, e.clientY);
+  });
+  pickerCanvas.addEventListener('pointermove', (e) => {
+    // Hover preview marker (light grey) follows the cursor always.
+    const rect = pickerCanvas.getBoundingClientRect();
+    if (pickerHover) {
+      pickerHover.style.left = (e.clientX - rect.left) + 'px';
+      pickerHover.style.top  = (e.clientY - rect.top)  + 'px';
+      pickerHover.classList.add('active');
+    }
+    // Live orbit preview — render the orbit for the cursor's c WITHOUT
+    // committing it to view.juliaC. So the orbit miniview morphs as you
+    // sweep the Mandelbrot, but the Julia canvas only re-renders on click.
+    if (orbitCtx && !pickerDragging) {
+      const { re, im } = pickerComplexFromPixel(
+        e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height
+      );
+      renderOrbitForC(re, im);
+    }
+    if (pickerDragging) applyJuliaCFromPicker(e.clientX, e.clientY);
+  });
+  pickerCanvas.addEventListener('pointerup', (e) => {
+    pickerDragging = false;
+    try { pickerCanvas.releasePointerCapture(e.pointerId); } catch {}
+  });
+  pickerCanvas.addEventListener('pointerleave', () => {
+    if (pickerHover) pickerHover.classList.remove('active');
+    // Cursor gone → snap orbit back to the committed c.
+    updateOrbitForCurrentC();
+  });
+  renderPickerOnce();
+  // Initial marker + body data-kind attribute so the CSS visibility rule fires.
+  document.body.dataset.kind = view.kind;
+  updatePickerMarker();
+}
+
 // Reference orbit computed in JS-DD (~31 digits), stored as TD-f32 for GPU (6 × f32 per iter).
 // refCx/refCy are Decimal so the full 60-digit view precision survives into the
 // delta computation in render() — otherwise subtracting a Decimal view from a
@@ -1051,8 +1686,17 @@ const orbitCache = {
 // Iterate in complex-DD (~31 digits) — matches the reference-orbit computation
 // precision, so reference-finding stays correct past the f64 ~10^15 wall.
 function countOrbitLen(cxDD, cyDD, maxIter) {
-  let z = [0, 0, 0, 0]; // complex DD: [reH, reL, imH, imL]
-  const c = [cxDD[0], cxDD[1], cyDD[0], cyDD[1]];
+  // Per-kind: Mandelbrot iterates z := z² + c starting at z₀ = 0, with
+  // c = (cxDD, cyDD). Julia iterates z := z² + julia_c starting at
+  // z₀ = (cxDD, cyDD), with c = view.juliaC (per-render constant).
+  let z, c;
+  if (view.kind === 'julia') {
+    z = [cxDD[0], cxDD[1], cyDD[0], cyDD[1]];
+    c = [view.juliaC.re, 0, view.juliaC.im, 0];
+  } else {
+    z = [0, 0, 0, 0]; // complex DD: [reH, reL, imH, imL]
+    c = [cxDD[0], cxDD[1], cyDD[0], cyDD[1]];
+  }
   for (let i = 0; i < maxIter; i++) {
     // Bailout needs only f32-ish precision — hi parts are plenty to compare to 256.
     if (z[0] * z[0] + z[2] * z[2] > 256.0) return i;
@@ -1119,8 +1763,14 @@ function orbitCacheFresh(viewCx, viewCy, scale, aspect, maxIter) {
 }
 
 function iterateOrbitDD(refCxDD, refCyDD, maxIter) {
-  let z = [0, 0, 0, 0];
-  const c = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+  let z, c;
+  if (view.kind === 'julia') {
+    z = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+    c = [view.juliaC.re, 0, view.juliaC.im, 0];
+  } else {
+    z = [0, 0, 0, 0];
+    c = [refCxDD[0], refCxDD[1], refCyDD[0], refCyDD[1]];
+  }
   let n = 0;
   for (let i = 0; i < maxIter; i++) {
     const zr = ddToF32TD(z[0], z[1]);
@@ -1138,8 +1788,15 @@ function iterateOrbitDD(refCxDD, refCyDD, maxIter) {
 
 function iterateOrbitDecimal(refCxDec, refCyDec, maxIter) {
   const TWO = new Decimal(2);
-  let zr = new Decimal(0);
-  let zi = new Decimal(0);
+  let zr, zi, cReDec, cImDec;
+  if (view.kind === 'julia') {
+    zr = refCxDec; zi = refCyDec;
+    cReDec = new Decimal(view.juliaC.re);
+    cImDec = new Decimal(view.juliaC.im);
+  } else {
+    zr = new Decimal(0); zi = new Decimal(0);
+    cReDec = refCxDec; cImDec = refCyDec;
+  }
   let n = 0;
   for (let i = 0; i < maxIter; i++) {
     const [zra, zrb, zrc] = decimalToTD(zr);
@@ -1156,8 +1813,8 @@ function iterateOrbitDecimal(refCxDec, refCyDec, maxIter) {
     if (zrN * zrN + ziN * ziN > 256.0) break;
     const zr2 = zr.times(zr);
     const zi2 = zi.times(zi);
-    const newZr = zr2.minus(zi2).plus(refCxDec);
-    const newZi = zr.times(zi).times(TWO).plus(refCyDec);
+    const newZr = zr2.minus(zi2).plus(cReDec);
+    const newZi = zr.times(zi).times(TWO).plus(cImDec);
     zr = newZr; zi = newZi;
   }
   return n;
@@ -1267,7 +1924,7 @@ function requestOrbitUpdateAsync(viewCx, viewCy, scale, aspect, maxIter, deepSea
   orbitDirty = true;
   pendingReqMaxIter = maxIter;
   const id = ++orbitWorkerReqId;
-  console.log(`[requestOrbitUpdateAsync] dispatching req#${id}: scale=${scale.toExponential(2)} aspect=${aspect.toFixed(3)} maxIter=${maxIter} prevCacheLen=${orbitCache.len}${deepSearch ? ' DEEP-SEARCH' : ''}`);
+  console.log(`[requestOrbitUpdateAsync] dispatching req#${id}: kind=${view.kind} scale=${scale.toExponential(2)} aspect=${aspect.toFixed(3)} maxIter=${maxIter} prevCacheLen=${orbitCache.len}${deepSearch ? ' DEEP-SEARCH' : ''}` + (view.kind === 'julia' ? ` juliaC=${view.juliaC.re}+${view.juliaC.im}i` : ''));
   // Wire protocol: Decimal strings so the worker gets the full 60-digit
   // navigation precision (orbit iteration itself falls back to DD internally).
   orbitWorker.postMessage({
@@ -1275,6 +1932,9 @@ function requestOrbitUpdateAsync(viewCx, viewCy, scale, aspect, maxIter, deepSea
     viewCxStr: viewCx.toString(),
     viewCyStr: viewCy.toString(),
     scale, aspect, maxIter, deepSearch,
+    kind: view.kind,
+    juliaReStr: view.juliaC.re.toString(),
+    juliaImStr: view.juliaC.im.toString(),
   });
   return true;
 }
@@ -1378,7 +2038,7 @@ function render() {
   const aspect = canvas.width / canvas.height;
   const orbitMaxIter = computeOrbitMaxIter();
   const directMode = effectiveTechnique() === 'direct';
-  console.log(`[render #${_seq}] entry: canvas=${canvas.width}×${canvas.height} aspect=${aspect.toFixed(3)} backend=${effectiveBackend()} technique=${effectiveTechnique()} directMode=${directMode} orbitDirty=${orbitDirty} cachedOrbitLen=${orbitCache.len} maxIterCovered=${orbitCache.maxIterCovered}`);
+  console.log(`[render #${_seq}] entry: canvas=${canvas.width}×${canvas.height} aspect=${aspect.toFixed(3)} backend=${effectiveBackend()} technique=${effectiveTechnique()} directMode=${directMode} kind=${view.kind} escapeR=${view.escapeRadius} (sq=${view.escapeRadius * view.escapeRadius}) orbitDirty=${orbitDirty} cachedOrbitLen=${orbitCache.len} maxIterCovered=${orbitCache.maxIterCovered}`);
   if (!skipReferenceUpdate && !directMode) {
     // Direct mode skips the orbit worker entirely — z=z²+c per pixel needs
     // no reference. Perturbation still requires a fresh orbit to perturb off.
@@ -1457,6 +2117,13 @@ function render() {
   uboF32[24] = pal.b[0]; uboF32[25] = pal.b[1]; uboF32[26] = pal.b[2];
   uboF32[28] = pal.c[0]; uboF32[29] = pal.c[1]; uboF32[30] = pal.c[2];
   uboF32[32] = pal.d[0]; uboF32[33] = pal.d[1]; uboF32[34] = pal.d[2];
+  // Julia uniforms: offset 144 (kind, u32), 152 (julia_re, f32), 156 (julia_im, f32).
+  uboU32[36] = view.kind === 'julia' ? 1 : 0;
+  uboF32[38] = view.juliaC.re;
+  uboF32[39] = view.juliaC.im;
+  // Escape radius squared at offset 160 (uboF32[40]). Squared so the shader
+  // does one compare instead of a sqrt per iter.
+  uboF32[40] = view.escapeRadius * view.escapeRadius;
   device.queue.writeBuffer(uniformBuffer, 0, uboData);
 
   const isRec = isRecording && recordTexture;
@@ -2012,6 +2679,9 @@ async function cpuRenderPixels(w, h, maxIter, wantBgra, onProgress, onTile, opts
       scaleQD, deltaReQD, deltaImQD,
       maxIter,
       palette: palettePayload,
+      // Julia plumbing: kind selects the iteration init/recurrence branch in
+      // cpu-render-core. juliaC is unused by Mandelbrot but harmless to send.
+      kind: view.kind,
     });
   })));
   // Dispatch's tiles all settled (real completions, timeouts, or cancellations).
@@ -3272,10 +3942,46 @@ async function renderAtQualityTier(tier) {
       // GPU mode: render at full canvas with full iter budget. For tiers 1-2
       // we use the cached orbit (no deep search); tier 3 paid for the deep
       // search above and now renders with that better orbit.
-      if (gpuBusy) { try { await device.queue.onSubmittedWorkDone(); } catch {} }
+      //
+      // The old version just called render() once and awaited
+      // onSubmittedWorkDone — but render() BAILS without submitting when
+      // orbitDirty is true (line ~1394). That meant the function returned
+      // before the orbit worker finished, leaving the just-cleared swapchain
+      // black until requestRender() happened to fire later. The fix mirrors
+      // the progressive fast path's wait loop (line ~2405): drive successive
+      // render() attempts until the orbit lands AND the swapchain has
+      // committed pixels, with a 30s ceiling so a stuck pipeline can't lock
+      // us forever.
+      console.log(`[hq-gpu] tier=${tier} entry: gpuBusy=${gpuBusy} orbitDirty=${orbitDirty} canvas=${canvas.width}×${canvas.height} cachedOrbitLen=${orbitCache.len}`);
+      if (gpuBusy) {
+        console.log(`[hq-gpu] tier=${tier} draining prior GPU work before resize`);
+        try { await device.queue.onSubmittedWorkDone(); } catch {}
+      }
+      const beforeW = canvas.width, beforeH = canvas.height;
       setCanvasDivisor(sizeDivisor);
+      console.log(`[hq-gpu] tier=${tier} after setCanvasDivisor(${sizeDivisor}): ${beforeW}×${beforeH} → ${canvas.width}×${canvas.height} (swapchain cleared)`);
+      const submitSeqBefore = renderCallSeq;
       render();
+      console.log(`[hq-gpu] tier=${tier} render() returned: seqAdvanced=${renderCallSeq > submitSeqBefore} orbitDirty=${orbitDirty} gpuBusy=${gpuBusy} pendingFrame=${pendingFrame} renderNeeded=${renderNeeded}`);
+      // Wait for the actual GPU work to land. We may need to round-trip
+      // through the orbit worker (orbitDirty → orbit response →
+      // requestRender → dispatchRender → render) before any pixels arrive.
+      const deadline = performance.now() + 30000;
+      let waitTicks = 0;
+      while (myGen === progressiveGen && performance.now() < deadline) {
+        if (!orbitDirty && !gpuBusy && !pendingFrame && !renderNeeded) break;
+        if (++waitTicks % 20 === 1) {
+          console.log(`[hq-gpu] tier=${tier} waiting tick=${waitTicks} orbitDirty=${orbitDirty} gpuBusy=${gpuBusy} pendingFrame=${pendingFrame} renderNeeded=${renderNeeded} cachedOrbitLen=${orbitCache.len}`);
+        }
+        await new Promise(r => setTimeout(r, 50));
+      }
+      if (myGen !== progressiveGen) {
+        console.log(`[hq-gpu] tier=${tier} cancelled during wait (myGen=${myGen} progressiveGen=${progressiveGen}) — bailing`);
+      } else if (performance.now() >= deadline) {
+        console.warn(`[hq-gpu] tier=${tier} 30s deadline hit: orbitDirty=${orbitDirty} gpuBusy=${gpuBusy} pendingFrame=${pendingFrame} renderNeeded=${renderNeeded} — swapchain may be stale`);
+      }
       try { await device.queue.onSubmittedWorkDone(); } catch {}
+      console.log(`[hq-gpu] tier=${tier} done — final renderCallSeq=${renderCallSeq} (started at ${submitSeqBefore})`);
     }
     const elapsedMs = Math.round(performance.now() - t0);
     console.log(`[quality] tier=${tier} complete in ${elapsedMs}ms`);
@@ -3356,10 +4062,11 @@ function copyCurrentViewToClipboard() {
 const copyClipboardBtn = document.getElementById('copy-clipboard');
 copyClipboardBtn.addEventListener('click', copyCurrentViewToClipboard);
 
-// Ctrl/Cmd+C copies the current view to the clipboard as PNG. We ignore the
-// shortcut when the user is copying from a text field (coord inputs) or when
-// there's actual text selected on the page — otherwise we'd hijack "real"
-// copy operations.
+// Ctrl/Cmd+C copies the current view to the clipboard as PNG.
+// Ctrl/Cmd+Shift+C downloads the view as a PNG file (same as the
+// screenshot button). Ignored when the user is copying from a text field
+// (coord inputs) or when there's text selected on the page, so we don't
+// hijack normal copy operations.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'c' && e.key !== 'C') return;
   if (!(e.metaKey || e.ctrlKey)) return;
@@ -3368,7 +4075,16 @@ window.addEventListener('keydown', (e) => {
   const sel = window.getSelection();
   if (sel && sel.toString().length > 0) return;
   e.preventDefault();
-  copyCurrentViewToClipboard();
+  if (e.shiftKey) {
+    console.log('[screenshot] ⌘/Ctrl+Shift+C → copy PNG to clipboard');
+    copyCurrentViewToClipboard();
+  } else {
+    console.log('[screenshot] ⌘/Ctrl+C → download PNG');
+    runScreenshot(async (blob) => {
+      downloadBlob(blob);
+      showSnackbar('Saved screenshot');
+    });
+  }
 });
 
 // Spacebar = "zoom one click toward the re/im coord". Shift+Space = "zoom
@@ -4481,6 +5197,12 @@ window.dumpMandelbrotState = function dumpMandelbrotState() {
   const decimalPrec = (typeof Decimal.precision === 'number') ? Decimal.precision : Decimal.config().precision;
   const snap = {
     view: {
+      kind: view.kind,                       // mandelbrot | julia
+      juliaC: view.kind === 'julia' ? { ...view.juliaC } : null,
+      escapeRadius: view.escapeRadius,
+      escapeRadiusSq: view.escapeRadius * view.escapeRadius,
+      maxIterOverride: view.maxIterOverride,
+      effectiveMaxIter: computeMaxIter(),
       cx: view.cx.toString(),
       cy: view.cy.toString(),
       scale: view.scale,
@@ -4655,3 +5377,16 @@ window.dumpMandelbrotState = function dumpMandelbrotState() {
 };
 window.mb = window.dumpMandelbrotState;
 console.log('[mandelbrot] debug helper ready: call window.mb() (or window.dumpMandelbrotState()) for a full state dump.');
+
+// ---------------------------------------------------------------------------
+// One-shot boot sync — runs once everything (coord input refs, kind UI, etc.)
+// has been declared. Without this, mandelbrot.html?kind=julia loads view.cx/cy
+// from HOME_BY_KIND.julia (= 0+0i) but the coord-re/coord-im inputs keep
+// their hard-coded HTML default values (Mandelbrot home) until the user
+// triggers something that calls updateCoordInputsFromView.
+// ---------------------------------------------------------------------------
+console.log(`[boot] one-shot sync: kind=${view.kind} view.cx=${view.cx} view.cy=${view.cy}`);
+updateCoordInputsFromView();
+if (typeof updateHUD === 'function') updateHUD();
+if (typeof updatePickerMarker === 'function') updatePickerMarker();
+if (typeof updateOrbitForCurrentC === 'function') updateOrbitForCurrentC();

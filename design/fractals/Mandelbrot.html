@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>mandelbrot · calje</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+<style>
+  /* ---------- reset / page ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--ink-0); color: var(--fg); overflow: hidden; }
+  body {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: var(--lh-snug);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- stage ---------- */
+  #stage {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    cursor: none;
+    background: #000;
+  }
+  #canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    image-rendering: pixelated;        /* during low-res passes */
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+  #canvas.smooth { image-rendering: auto; }
+
+  /* faint scanline garnish — kept tasteful, low opacity */
+  #stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.0) 0 1px,
+      rgba(0,0,0,0.18) 1px 2px
+    );
+    mix-blend-mode: multiply;
+    opacity: 0.35;
+    z-index: 2;
+  }
+
+  /* ---------- cursor overlay ---------- */
+  #cursor {
+    position: absolute;
+    pointer-events: none;
+    z-index: 6;
+    transform: translate(-50%, -50%);
+    will-change: transform, left, top;
+  }
+  #cursor svg { display: block; overflow: visible; }
+  #cursor.hidden { display: none; }
+
+  /* ---------- panels ---------- */
+  .panel {
+    position: fixed;
+    top: var(--s-4);
+    z-index: 10;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-3) var(--s-4);
+    background: rgba(10, 10, 10, 0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    box-shadow: var(--shadow-card);
+    max-width: calc(100vw - var(--s-7));
+  }
+  .panel.left  { left:  var(--s-4); }
+  .panel.right { right: var(--s-4); }
+
+  .panel .row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .panel .row + .row { margin-top: var(--s-1); }
+
+  .label {
+    color: var(--fg-subtle);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .label.dim { color: var(--fg-faint); }
+  .sep {
+    color: var(--fg-faint);
+    user-select: none;
+    padding: 0 2px;
+  }
+
+  /* pill control — input / select / button share the look */
+  .pill {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--ink-1);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 10px;
+    height: 26px;
+    outline: none;
+    transition: background var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out),
+                color 0s;
+  }
+  .pill:hover { background: var(--ink-2); border-color: var(--border-strong); }
+  .pill:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+  .pill:active { background: var(--ink-0); border-color: var(--accent); color: var(--accent-dim); }
+
+  button.pill { cursor: pointer; user-select: none; }
+  button.pill.accent { color: var(--accent); }
+  button.pill.armed  { color: var(--ink-0); background: var(--accent); border-color: var(--accent); }
+  button.pill.armed:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+
+  /* compact pills for the mantissa/exponent + iter count */
+  .pill.num    { width: 64px; text-align: center; padding-left: 6px; padding-right: 6px; }
+  .pill.num.s  { width: 44px; }
+  .pill.coord  { width: 220px; text-align: left; font-variant-numeric: tabular-nums; }
+
+  select.pill {
+    background-image: linear-gradient(45deg, transparent 50%, var(--fg-subtle) 50%),
+                      linear-gradient(135deg, var(--fg-subtle) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 11px, calc(100% - 10px) 11px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+    padding-right: 22px;
+    cursor: pointer;
+  }
+  select.pill::-ms-expand { display: none; }
+
+  input.pill[type="number"]::-webkit-outer-spin-button,
+  input.pill[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input.pill[type="number"] { -moz-appearance: textfield; }
+
+  .key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 20px;
+    padding: 0 6px;
+    background: var(--ink-1);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    color: var(--fg-subtle);
+    font-size: 11px;
+    background: transparent;
+  }
+  .badge.live { color: var(--accent); border-color: rgba(124,255,107,0.35); }
+  .badge.live::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    margin-right: 6px;
+    animation: pulse 1.4s var(--ease-out) infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* selection rect (zoom preview) */
+  #sel {
+    position: absolute;
+    pointer-events: none;
+    z-index: 5;
+    border: 1px solid rgba(242, 240, 234, 0.85);
+    background: rgba(124, 255, 107, 0.04);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4) inset;
+    transition: opacity 120ms var(--ease-out);
+  }
+  #sel.hidden { opacity: 0; }
+
+  /* render progress hairline */
+  #progress {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    height: 1px;
+    background: linear-gradient(to right, var(--accent) var(--p,0%), transparent var(--p,0%));
+    transition: opacity var(--dur-base) var(--ease-out);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 11;
+  }
+  #progress.busy { opacity: 0.9; }
+
+  /* status / toast */
+  #toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    background: rgba(10,10,10,0.85);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    z-index: 12;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+
+  /* wordmark — bottom-left brand mark */
+  #brand {
+    position: fixed;
+    left: var(--s-4);
+    bottom: var(--s-4);
+    z-index: 9;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-subtle);
+    pointer-events: none;
+    letter-spacing: 0.04em;
+  }
+  #brand b { color: var(--fg); font-weight: 700; }
+  #brand .sep { color: var(--fg-faint); margin: 0 6px; }
+  #brand .acc { color: var(--accent); }
+
+  /* toggleable chrome */
+  body.chrome-hidden .panel,
+  body.chrome-hidden #brand,
+  body.chrome-hidden #recflag,
+  body.chrome-hidden #progress {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px);
+  }
+  .panel, #brand, #recflag {
+    transition: opacity var(--dur-base) var(--ease-out),
+                transform var(--dur-base) var(--ease-out);
+  }
+
+  /* menu handle — always-visible toggle */
+  #handle {
+    position: fixed;
+    top: var(--s-4);
+    left: var(--s-4);
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(10,10,10,0.78);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 13;
+    display: flex; align-items: center; justify-content: center;
+    transition: background var(--dur-fast) var(--ease-out), transform var(--dur-base) var(--ease-out);
+  }
+  #handle:hover { background: rgba(20,20,20,0.92); }
+  body.chrome-hidden #handle { transform: scale(0.92); }
+  .panel.left { left: 64px; }
+
+  /* recording flag */
+  #recflag {
+    position: fixed;
+    right: var(--s-4);
+    bottom: var(--s-4);
+    z-index: 9;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: rgba(10,10,10,0.8);
+    border: 1px solid rgba(255,61,90,0.4);
+    border-radius: var(--r-pill);
+    color: var(--glitch-red);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  #recflag.on { display: inline-flex; }
+  #recflag::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--glitch-red);
+    box-shadow: 0 0 8px var(--glitch-red);
+    animation: pulse 1s var(--ease-out) infinite;
+  }
+
+  /* small visual tweaks for narrow screens */
+  @media (max-width: 880px) {
+    .panel.left, .panel.right { right: var(--s-4); left: var(--s-4); }
+    .panel.right { top: calc(var(--s-4) + 78px); }
+    .pill.coord { width: 160px; }
+  }
+</style>
+</head>
+<body>
+
+<button id="handle" title="toggle menu (m)" aria-label="toggle menu">
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+    <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>
+</button>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="sel" class="hidden"></div>
+  <div id="cursor" class="hidden">
+    <svg width="48" height="48" viewBox="-24 -24 48 48">
+      <circle cx="0" cy="0" r="11" fill="none" stroke="rgba(242,240,234,0.9)" stroke-width="1"/>
+      <line x1="-22" y1="0" x2="-14" y2="0" stroke="rgba(242,240,234,0.7)" stroke-width="1"/>
+      <line x1="14"  y1="0" x2="22"  y2="0" stroke="rgba(242,240,234,0.7)" stroke-width="1"/>
+      <line x1="0" y1="-22" x2="0" y2="-14" stroke="rgba(242,240,234,0.7)" stroke-width="1"/>
+      <line x1="0" y1="14"  x2="0" y2="22"  stroke="rgba(242,240,234,0.7)" stroke-width="1"/>
+      <circle cx="0" cy="0" r="1.2" fill="rgba(242,240,234,0.95)"/>
+    </svg>
+  </div>
+</div>
+
+<!-- ============== TOP-LEFT ============== -->
+<div class="panel left">
+  <div class="row">
+    <a href="Home.html" style="color:var(--accent);text-decoration:none">← atlas</a>
+    <span class="sep">·</span>
+    <span class="label">mandelbrot</span>
+  </div>
+  <div class="row">
+    <span class="label">zoom</span>
+    <input id="zMant" class="pill num" type="text" inputmode="decimal" value="1.00" />
+    <span class="sep">· 10^</span>
+    <input id="zExp" class="pill num s" type="number" step="1" value="0" />
+    <span class="sep">·</span>
+    <span id="zMode" class="badge">direct</span>
+  </div>
+  <div class="row">
+    <span class="label">iter</span>
+    <span id="iterNow" class="label" style="color:var(--fg)">0</span>
+    <span class="sep">/</span>
+    <span id="iterMax" class="label">512</span>
+    <span class="sep">·</span>
+    <span id="renderTime" class="label dim">—</span>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <span class="key">click</span><span class="label">in</span>
+    <span class="sep">·</span>
+    <span class="key">shift-click</span><span class="label">out</span>
+    <span class="sep">·</span>
+    <span class="key">space</span><span class="label">/</span><span class="key">shift-space</span>
+    <span class="label">zoom</span>
+    <span class="sep">·</span>
+    <span class="key">⌃ c</span><span class="label">copy</span>
+    <span class="sep">·</span>
+    <span class="key">⌃ ⇧ c</span><span class="label">png</span>
+    <span class="sep">·</span>
+    <span class="key">h</span><span class="label">quality</span>
+    <span class="sep">·</span>
+    <span class="key">m</span><span class="label">menu</span>
+  </div>
+</div>
+
+<!-- ============== TOP-RIGHT ============== -->
+<div class="panel right">
+  <div class="row">
+    <span class="label">palette</span>
+    <select id="palette" class="pill" style="width:108px">
+      <option value="warm">warm</option>
+      <option value="phosphor">phosphor</option>
+      <option value="ivory">ivory</option>
+      <option value="electric">electric</option>
+      <option value="abyss">abyss</option>
+      <option value="ember">ember</option>
+    </select>
+    <span class="label">re</span>
+    <input id="re" class="pill coord" type="text" value="-0.5" />
+    <span class="label">im</span>
+    <input id="im" class="pill coord" type="text" value="0" />
+    <button id="auto"   class="pill" title="auto-zoom">▶ auto</button>
+    <span class="label">preset</span>
+    <select id="preset" class="pill" style="width:200px">
+      <option value="">—</option>
+    </select>
+    <button id="copy"       class="pill" title="copy view URL">copy</button>
+    <button id="screenshot" class="pill" title="save PNG">screenshot</button>
+  </div>
+  <div class="row" style="justify-content:flex-end;width:100%;">
+    <span class="label">cpus</span>
+    <span id="cpus" class="pill num s" style="cursor:default">—</span>
+    <span class="label">render w</span>
+    <select id="renderW" class="pill" style="width:96px">
+      <option value="auto">auto</option>
+      <option value="540">540</option>
+      <option value="720">720</option>
+      <option value="1080">1080</option>
+      <option value="1440">1440</option>
+      <option value="2160">2160</option>
+    </select>
+    <button id="record" class="pill" title="record video">record</button>
+    <button id="reset"  class="pill" title="reset view">reset</button>
+  </div>
+</div>
+
+<div id="progress" style="--p:0%"></div>
+<div id="toast"></div>
+<div id="brand">
+  <b>calje</b><span class="sep">·</span><span>mandelbrot</span><span class="sep">·</span><span class="acc">z := z² + c</span>
+</div>
+<div id="recflag">rec</div>
+
+<script src="mandelbrot.js"></script>
+</body>
+</html>

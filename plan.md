@@ -4,6 +4,14 @@ Living document for the multi-iteration refactor that lifts the browser-side
 zoom ceiling from ~10^31 to 10^100+ and enables long-running deep-zoom video
 production via the Jetson CUDA backend. Updated as iterations land.
 
+> **2026-05-26 scope note** — the site grew sideways in May 2026 into a
+> **12-fractal Atlas** (see `Atlas iteration` section near the bottom).
+> This precision/depth roadmap continues to apply *only* to the
+> Mandelbrot/Julia tab; the other ten fractals + Game of Life are
+> orthogonal. The Jetson backend has been **hidden from the UI** as part of
+> a shift to static-only deployment — `Iteration 4 (Jetson CUDA)` is on hold
+> until the user decides to put the backend back.
+
 ## Goal
 
 Deep-zoom **video production**, with the browser as a fluent exploration UI.
@@ -147,6 +155,39 @@ For coordinates / seed library / interesting points, see `POINTS.md` (deep
 zoom catalogue). Bookmarks UI is a future iteration not on this plan; the
 file is ground truth for where to look first.
 
+## Atlas iteration — Fractal Atlas scope expansion (DONE 2026-05-25/26)
+
+Independent of the deep-zoom precision lift, the site was restructured into
+a 12-fractal explorer. The Mandelbrot deep-zoom engine remains the
+infrastructural centerpiece; everything else is built around it.
+
+**Pages**
+- `index.html` — home tile grid (12 fractals). Live picker, info `i` button per tile.
+- `mandelbrot.html` — Mandelbrot **and** Julia (toggled by `?kind=` or in-UI selector). Uses the existing WebGPU + perturbation + DD/QD engine in `main.js`.
+- `fractal.html` — generic viewer for the other 10 fractals (julia, burning_ship, mandelbulb via escape-time; sierpinski, barnsley via IFS; koch, dragon via L-system; cantor, menger via subdivision; lorenz via RK4 ODE).
+- `game-of-life.html` — Conway's Game of Life with pattern picker.
+
+**Renderer pairs** under `frontend/assets/js/renderers/{,gpu/}` — every fractal has a CPU + WebGPU implementation; `create()` tries GPU first, silently falls back to CPU.
+
+**Julia integration into main.js** (deep-zoom engine)
+- Single `kind: 0|1` UBO uniform branches the WGSL shader between Mandelbrot (`z₀=0, c per pixel`) and Julia (`z₀ per pixel, c = julia_c fixed`).
+- Julia perturbation: `w_0 = δz` (not zero), recurrence drops `+δc` (because `c_pixel ≡ c_ref` when both are `julia_c`), rebase formula gains a `−Z_0` subtract for the Julia branch (see [[julia-perturbation-rebase]] memory). Three branches; missing any one degrades quickly.
+- Per-kind `HOME_BY_KIND` and orbit cache invalidation on kind switch.
+
+**UX additions**
+- Smooth continuous "dive" zoom (rAF + CSS-transform glide) for the 10 non-Mandelbrot fractals — see `fractal-viewer.js`. Mandelbrot kept its original click-stepped auto-zoom (the dive plan was attempted and reverted).
+- L-system & IFS gained auto-depth-bump on zoom (Koch/Dragon recompute at higher L-system depth; IFS scales chaos-game iteration count linearly with visible zoom).
+- User-configurable `esc` (escape radius) and `iter` (max iterations) inputs in the Mandelbrot/Julia toolbar, with the "no writeback during typing" pattern (see [[feedback-input-no-writeback-during-typing]]).
+- Inline Mandelbrot c-picker on the Julia page, with live orbit miniview (z := z² + c trajectory from z₀=0). Hovering on the picker previews the orbit; clicking commits.
+
+**Information layer**
+- `assets/js/fractal-info.js` ships history/importance/references content for all 12 fractals + Game of Life. `window.showFractalInfo(id)` opens a modal. Info `i` button on every fractal page and every home tile (see [[reference-fractal-info-modal]]).
+
+**Deployment shift** — see [[jetson-ui-hidden]]
+- Site now ships as static files. Cloudflare Pages / Netlify / S3 / nginx all work.
+- Jetson backend hidden from UI but wiring (`/jetson/`, Helm chart, Dockerfile) still on disk.
+- favicon.ico (multi-resolution from `assets/renders/whole.png`).
+
 ## Done log
 
 - 2026-04-27: precision floor fix (`Decimal.set({precision: ...})` floor at 60)
@@ -164,3 +205,4 @@ file is ground truth for where to look first.
   progressive's image as baseline so HQ doesn't blank the canvas.
 - 2026-04-28: Iteration 1 (render-width knob + auto-scaling).
 - 2026-04-28: Iteration 2 foundation (QD-f64 library + tests).
+- 2026-05-25/26: **Fractal Atlas** — 12-fractal site restructure. New pages (home grid, generic fractal viewer, Game of Life). Renderer pairs (CPU + GPU) for escape-time / IFS / L-system / subdivision / ODE. Julia integration into the WebGPU engine. Info modal + content for all 12. Static-only deployment.

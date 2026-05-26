@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mandelbrot · calje</title>
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="stylesheet" href="assets/css/colors_and_type.css" />
+<style>
+  /* ---------- page reset & stage ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--ink-0); color: var(--fg); overflow: hidden;
+    font-family: var(--font-mono); font-size: 12px; line-height: var(--lh-snug);
+    -webkit-font-smoothing: antialiased;
+  }
+  #canvas {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    display: block;
+    background: #000;
+    cursor: crosshair;
+    image-rendering: pixelated;
+  }
+  #canvas.smooth { image-rendering: auto; }
+
+  /* faint scanline garnish (matches the design's Mandelbrot.html) */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgba(255,255,255,0) 0 1px, rgba(0,0,0,0.18) 1px 2px);
+    mix-blend-mode: multiply;
+    opacity: 0.32;
+    z-index: 2;
+  }
+
+  /* ---------- selection rect (legacy click-to-zoom box) ---------- */
+  #selection {
+    position: absolute;
+    border: 1px solid rgba(242,240,234,0.85);
+    background: rgba(124, 255, 107, 0.04);
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.20);
+    pointer-events: none; display: none;
+    z-index: 5;
+  }
+
+  /* ---------- click-zoom idle spinner (kept from legacy) ---------- */
+  #click-spinner {
+    position: fixed; width: 28px; height: 28px;
+    pointer-events: none; transform: translate(-50%, -50%);
+    display: none; z-index: 100;
+  }
+  #click-spinner.active { display: block; }
+  #click-spinner circle.track { stroke: rgba(0,0,0,0.55); }
+  #click-spinner circle.fill {
+    stroke: var(--accent);
+    transform: rotate(-90deg); transform-origin: 50% 50%;
+    stroke-dasharray: 100; stroke-dashoffset: 100;
+  }
+  #click-spinner.active circle.fill { animation: click-spinner-fill 2s linear forwards; }
+  @keyframes click-spinner-fill { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+
+  /* ---------- coord marker (kept from legacy) ---------- */
+  #coord-marker {
+    position: fixed; width: 18px; height: 18px;
+    transform: translate(-50%, -50%) scale(1);
+    pointer-events: none; display: none; z-index: 90;
+    transition: transform 0.18s ease-out, filter 0.18s ease-out;
+  }
+  #coord-marker.active { display: block; }
+  #coord-marker.highlighted {
+    transform: translate(-50%, -50%) scale(1.6);
+    filter: drop-shadow(0 0 6px var(--accent-glow));
+  }
+  #coord-marker svg { width: 100%; height: 100%; overflow: visible; }
+  #coord-marker svg .ring { stroke: var(--fg); stroke-width: 2; fill: none; opacity: 0.95; }
+  #coord-marker svg .dot  { fill: var(--accent); }
+  #coord-marker svg .halo { stroke: rgba(0,0,0,0.6); stroke-width: 4; fill: none; }
+
+  .tile-flash {
+    position: fixed; pointer-events: none;
+    box-sizing: border-box;
+    border: 2px solid var(--glitch-amber);
+    box-shadow: 0 0 8px rgba(245,197,24,0.6) inset, 0 0 8px rgba(245,197,24,0.6);
+    animation: tile-flash-anim 600ms ease-out forwards;
+    z-index: 80;
+  }
+  @keyframes tile-flash-anim { 0% { opacity: 1; } 100% { opacity: 0; } }
+
+  /* ============================================================
+     Top panels — adapted from the design's Mandelbrot.html
+     ============================================================ */
+  .panel {
+    position: fixed;
+    top: var(--s-4);
+    z-index: 10;
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    background: rgba(10,10,10,0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    color: var(--fg);
+    font-family: var(--font-mono); font-size: 12px;
+    box-shadow: var(--shadow-card);
+    max-width: calc(100vw - var(--s-7));
+  }
+  /* Single centered header — sized to its content, never stretches.
+     Centered horizontally so it doesn't run into the round #handle button
+     on the left. max-width caps it so on narrow viewports it wraps to more
+     rows instead of covering the handle. */
+  .panel.top {
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100vw - 120px);
+    flex-direction: column;
+    align-items: stretch;
+    z-index: 11;
+    padding: var(--s-2) var(--s-4);
+  }
+  .panel.top .row {
+    justify-content: center;
+  }
+  .panel .row {
+    display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap;
+  }
+  .panel .row + .row { margin-top: var(--s-1); }
+
+  .label { color: var(--fg-subtle); font-size: 12px; letter-spacing: 0.02em; }
+  .label.dim { color: var(--fg-faint); }
+  .sep { color: var(--fg-faint); user-select: none; padding: 0 2px; }
+
+  /* pill control — used for inputs/selects/buttons inside the panels */
+  .pill {
+    appearance: none; -webkit-appearance: none;
+    background: var(--ink-1);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-family: var(--font-mono); font-size: 12px;
+    line-height: 1;
+    padding: 6px 10px;
+    height: 26px;
+    outline: none;
+    transition: background var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out), color 0s;
+  }
+  .pill:hover { background: var(--ink-2); border-color: var(--border-strong); }
+  .pill:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+  button.pill { cursor: pointer; user-select: none; }
+  button.pill.active,
+  button.pill.armed { color: var(--ink-0); background: var(--accent); border-color: var(--accent); }
+  .pill.num { width: 60px; text-align: center; padding-left: 6px; padding-right: 6px; font-variant-numeric: tabular-nums; }
+  .pill.num.s { width: 44px; }
+  .pill.coord { width: 160px; text-align: left; font-variant-numeric: tabular-nums; }
+  select.pill {
+    background-image: linear-gradient(45deg, transparent 50%, var(--fg-subtle) 50%),
+                      linear-gradient(135deg, var(--fg-subtle) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 11px, calc(100% - 10px) 11px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+    padding-right: 22px;
+    cursor: pointer;
+  }
+  input.pill[type="number"]::-webkit-outer-spin-button,
+  input.pill[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input.pill[type="number"] { -moz-appearance: textfield; }
+
+  .key {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 20px; padding: 0 6px;
+    background: var(--ink-1); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 3px;
+    color: var(--fg); font-family: var(--font-mono); font-size: 11px; line-height: 1;
+  }
+  .badge {
+    display: inline-flex; align-items: center;
+    height: 20px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: var(--r-pill);
+    color: var(--fg-subtle); font-size: 11px;
+    background: transparent;
+  }
+
+  /* legacy 'iter' element gets restyled to fit the design panel */
+  #iter {
+    color: var(--fg);
+    font-family: var(--font-mono); font-size: 12px;
+  }
+
+  /* atlas-link — primary "home" / back-to-index button. Pill-shaped so it's
+     clearly a clickable target, accent-coloured to match the brand. Lives
+     in the top-left panel; the panel itself hides on `m`, but the link is
+     always the first thing in the panel so it's easy to find when shown. */
+  .atlas-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 10px;
+    background: var(--ink-1);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    transition: background var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out);
+  }
+  .atlas-link:hover {
+    background: var(--ink-2);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* ---------- permanent top-left brand bar ---------- */
+  #brand-bar {
+    position: fixed;
+    top: var(--s-4);
+    left: var(--s-4);
+    z-index: 12;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    height: 28px;
+    padding: 0 12px;
+    background: rgba(10, 10, 10, 0.78);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-muted);
+    box-shadow: var(--shadow-card);
+    box-sizing: border-box;
+  }
+  #brand-bar .atlas-link {
+    /* tighter inside the badge so the whole thing reads as one pill */
+    height: auto;
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+  #brand-bar .atlas-link:hover {
+    background: transparent;
+    color: var(--accent-dim);
+  }
+  #brand-bar .sep   { color: var(--fg-faint); margin: 0 2px; }
+  #brand-bar .label { color: var(--fg); }
+
+  /* Info "i" button — small italic-i circle next to the fractal name in the
+     brand bar. Reused on every fractal page (same class). */
+  .info-btn {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-family: 'Times New Roman', serif;
+    font-style: italic;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0;
+    margin-left: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out);
+  }
+  .info-btn:hover {
+    background: var(--ink-2);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* ---------- menu handle (circle button below the brand bar) ---------- */
+  #handle {
+    position: fixed;
+    /* Sits directly below #brand-bar (16 top + 28 height + 8 gap = 52). */
+    top: 52px; left: var(--s-4);
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: rgba(10,10,10,0.78);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    cursor: pointer;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    z-index: 13;
+    display: flex; align-items: center; justify-content: center;
+    transition: background var(--dur-fast) var(--ease-out), transform var(--dur-base) var(--ease-out);
+  }
+  #handle:hover { background: rgba(20,20,20,0.92); }
+  body.chrome-hidden #handle { transform: scale(0.92); }
+  /* Icon toggle: when chrome is visible the menu is "open" → show ✕ so the
+     button signals what clicking will do (close). When chrome is hidden the
+     menu is "closed" → show ☰. */
+  #handle .hi-menu  { display: none; }
+  #handle .hi-close { display: block; }
+  body.chrome-hidden #handle .hi-menu  { display: block; }
+  body.chrome-hidden #handle .hi-close { display: none; }
+
+  /* ---------- brand watermark ---------- */
+  #brand {
+    position: fixed; left: var(--s-4); bottom: var(--s-4); z-index: 9;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--fg-subtle);
+    pointer-events: none;
+    letter-spacing: 0.04em;
+  }
+  #brand b { color: var(--fg); font-weight: 700; }
+  #brand .sep { color: var(--fg-faint); margin: 0 6px; }
+  #brand .acc { color: var(--accent); }
+
+  /* chrome toggle: hide panels but keep canvas live */
+  body.chrome-hidden .panel,
+  body.chrome-hidden #brand {
+    opacity: 0; pointer-events: none; transform: translateY(-4px);
+  }
+  .panel, #brand { transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out); }
+  /* #hotkeys uses translateY(-50%) for vertical centering — fade-only
+     so the centering transform isn't trampled. */
+  body.chrome-hidden #hotkeys { opacity: 0; pointer-events: none; }
+  #hotkeys { transition: opacity var(--dur-base) var(--ease-out); }
+
+  /* ============================================================
+     Julia c-picker — small Mandelbrot thumbnail, visible only in
+     Julia mode. Bottom-right corner, clear of the brand strip.
+     Click anywhere on it to set view.juliaC.
+     ============================================================ */
+  #julia-picker {
+    position: fixed;
+    right: var(--s-4);
+    bottom: var(--s-4);
+    z-index: 10;
+    display: none;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    background: rgba(10, 10, 10, 0.85);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    font-family: var(--font-mono);
+    box-shadow: var(--shadow-card);
+    user-select: none;
+  }
+  body[data-kind="julia"] #julia-picker { display: flex; }
+  #julia-picker .jp-title {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  #julia-picker .jp-canvas-wrap {
+    position: relative;
+    cursor: crosshair;
+    line-height: 0;
+  }
+  #julia-picker canvas {
+    display: block;
+    border: 1px solid var(--border);
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+  /* Orbit canvas uses smooth (anti-aliased) line drawing — pixelated is wrong
+     here because it's vector strokes, not a pixel raster like the Mandelbrot. */
+  #julia-orbit-canvas {
+    image-rendering: auto;
+    background: #000;
+  }
+  #julia-picker-marker {
+    position: absolute;
+    width: 12px; height: 12px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.7);
+    display: none;
+  }
+  #julia-picker-marker.active { display: block; }
+  #julia-picker-hover {
+    position: absolute;
+    width: 10px; height: 10px;
+    border: 1.5px solid rgba(242, 240, 234, 0.5);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    display: none;
+  }
+  #julia-picker-hover.active { display: block; }
+  #julia-picker .jp-coords {
+    font-size: 11px;
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  #julia-picker .jp-coords span { color: var(--fg); }
+  /* Hide along with the rest of the chrome on `m` */
+  body.chrome-hidden[data-kind="julia"] #julia-picker {
+    opacity: 0; pointer-events: none;
+  }
+  #julia-picker { transition: opacity var(--dur-base) var(--ease-out); }
+
+  /* ============================================================
+     Hotkey strip — vertical, left edge, always visible.
+     Not hidden by `m` (which only toggles the top panels + brand).
+     Pointer-events disabled so it never intercepts canvas clicks
+     even when it sits over the fractal.
+     ============================================================ */
+  #hotkeys {
+    position: fixed;
+    left: var(--s-4);
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 9;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+    padding: var(--s-3) var(--s-4);
+    background: rgba(10, 10, 10, 0.62);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    user-select: none;
+    box-shadow: var(--shadow-card);
+  }
+  #hotkeys .hk-title {
+    color: var(--accent);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-bottom: var(--s-2);
+    padding-bottom: var(--s-2);
+    border-bottom: 1px solid var(--border);
+  }
+  #hotkeys .hk-row {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    align-items: center;
+    gap: var(--s-2);
+    line-height: 1.4;
+  }
+  #hotkeys .hk-row .key {
+    /* re-use the .key style from the panels but tighter */
+    height: 18px;
+    padding: 0 5px;
+    font-size: 10px;
+    justify-self: start;
+  }
+  #hotkeys .hk-row .label {
+    color: var(--fg-muted);
+    font-size: 11px;
+  }
+
+  /* ============================================================
+     Legacy modals — kept verbatim with re-themed dark backgrounds
+     (record / stats / arm-bar / progress / cpu-status / error / snackbar)
+     ============================================================ */
+  #progress {
+    position: fixed; bottom: 16px; left: 50%;
+    transform: translateX(-50%);
+    display: none; align-items: center; gap: 12px;
+    background: rgba(10,10,10,0.85);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px;
+    z-index: 120;     /* above coord-marker (90) so the bar isn't covered */
+  }
+  #progress.active { display: flex; }
+  #progress-bar { width: 240px; height: 4px; background: var(--ink-2); border-radius: 2px; overflow: hidden; }
+  #progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.1s linear; }
+  #progress-text { font-size: 12px; white-space: nowrap; color: var(--fg); font-family: var(--font-mono); }
+  #progress .btn, #progress button { margin-left: 4px; }
+
+  #arm-bar {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(10,10,10,0.88);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 16px; display: none;
+    align-items: center; gap: 12px; font-size: 13px;
+    color: var(--fg); font-family: var(--font-mono);
+    z-index: 120;     /* above coord-marker so the prompt stays clickable */
+  }
+  #arm-bar.active { display: flex; }
+
+  #record-modal, #stats-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center;
+    /* Above coord-marker (90), click-spinner (100), and cpu-status (150)
+       so the modal really IS modal. Snackbar (200) intentionally stays
+       above so post-action toasts remain visible. */
+    z-index: 180;
+  }
+  #record-modal.active, #stats-modal.active { display: flex; }
+  #record-modal .card, #stats-modal .card {
+    background: var(--ink-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px 24px; min-width: 360px;
+    display: flex; flex-direction: column; gap: 14px;
+    font-size: 13px; font-family: var(--font-mono); color: var(--fg);
+  }
+  #record-modal h3, #stats-modal h3 { margin: 0; font-size: 14px; color: var(--fg); font-weight: 600; }
+  #record-modal label.target { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  #record-modal label.target input[type=checkbox] { accent-color: var(--accent); }
+  #record-modal label.target .hint { color: var(--fg-subtle); font-size: 11px; margin-left: auto; }
+  #record-modal label.target.disabled { color: var(--fg-faint); cursor: not-allowed; }
+  #record-modal .actions, #stats-modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  #record-modal .record-params {
+    display: grid; grid-template-columns: max-content 1fr;
+    column-gap: 12px; row-gap: 6px; align-items: center;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  #record-modal .record-params label { color: var(--fg-subtle); font-size: 12px; }
+  #record-modal .record-params input {
+    width: 80px; background: var(--ink-2); color: var(--fg);
+    border: 1px solid var(--border); padding: 4px 6px; border-radius: 4px;
+    font-family: var(--font-mono); font-size: 12px;
+  }
+  #record-modal .rec-renderer {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  #record-modal .rec-renderer .rr-label { color: var(--fg-subtle); font-size: 12px; }
+  #record-modal .rec-renderer label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: 12px; }
+  #record-modal .rec-renderer input[type=radio] { accent-color: var(--accent); margin: 0; }
+  #record-modal .rec-renderer .hint { color: var(--fg-subtle); font-size: 11px; margin-left: auto; }
+
+  .stats-grid { display: grid; grid-template-columns: max-content 1fr; column-gap: 24px; row-gap: 8px; font-variant-numeric: tabular-nums; }
+  .stats-grid .label { color: var(--fg-subtle); }
+  .stats-grid .value { color: var(--fg); text-align: right; }
+  .stats-grid .sep { grid-column: 1 / -1; border-top: 1px solid var(--border); margin: 4px 0; }
+  .stats-grid .highlight .label, .stats-grid .highlight .value { color: var(--fg); }
+
+  #error {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: var(--ink-0); color: var(--glitch-red);
+    padding: 24px; text-align: center; z-index: 300;   /* fatal — above EVERY other overlay */
+    font-family: var(--font-mono);
+  }
+  #snackbar {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(16px);
+    background: rgba(10,10,10,0.92); color: var(--fg);
+    border: 1px solid var(--border); border-radius: var(--r-pill);
+    padding: 8px 14px; font-size: 12px; font-family: var(--font-mono);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    z-index: 200;
+  }
+  #snackbar.active { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  #cpu-status {
+    position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%);
+    background: rgba(10,10,10,0.92); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; font-size: 12px;
+    display: none; align-items: center; gap: 8px;
+    pointer-events: none; z-index: 150;
+    font-family: var(--font-mono);
+  }
+  #cpu-status.active { display: inline-flex; }
+  #cpu-status::before {
+    content: ''; width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.2); border-top-color: var(--accent);
+    animation: cpu-status-spin 0.9s linear infinite;
+  }
+  @keyframes cpu-status-spin { to { transform: rotate(360deg); } }
+
+  /* ---------- responsive ---------- */
+  /* On narrow screens, give the panel more vertical room (the row content
+     wraps; padding stays generous so the panel still feels like a header). */
+  @media (max-width: 720px) {
+    .panel.top { max-width: calc(100vw - 72px); padding: var(--s-2) var(--s-3); }
+    .pill.coord { width: 140px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- canvas: WebGPU surface from main.js -->
+<canvas id="canvas"></canvas>
+<div id="selection"></div>
+
+<svg id="click-spinner" viewBox="0 0 36 36">
+  <circle class="track" cx="18" cy="18" r="16" stroke-width="3" fill="none"/>
+  <circle class="fill"  cx="18" cy="18" r="16" stroke-width="3" fill="none"/>
+</svg>
+
+<!-- Permanent top-left badge — atlas link + fractal name. Always visible
+     (never hidden by `m`); position is fixed so it occupies the same spot
+     regardless of fractal kind. -->
+<header id="brand-bar">
+  <a href="index.html" class="atlas-link" title="back to the fractal atlas (home)">← atlas</a>
+  <span class="sep">·</span>
+  <span class="label" id="kind-label">mandelbrot</span>
+  <button id="info-btn" class="info-btn" title="about this fractal" aria-label="info">i</button>
+</header>
+
+<button id="handle" title="toggle menu (m)" aria-label="toggle menu">
+  <!-- Menu (☰) — shown when chrome is hidden, signalling "click to open menu" -->
+  <svg class="hi-menu" width="14" height="14" viewBox="0 0 16 16" fill="none">
+    <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>
+  <!-- Close (✕) — shown when chrome is visible, signalling "click to close menu" -->
+  <svg class="hi-close" width="14" height="14" viewBox="0 0 16 16" fill="none">
+    <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>
+</button>
+
+<!-- TOP-LEFT: identity + zoom + iter + hotkey legend -->
+<!-- TOP CENTERED HEADER — all controls in one panel, sizes to content -->
+<div class="panel top">
+  <div class="row">
+    <span class="label">zoom</span>
+    <input id="zoom-mantissa" class="pill num" type="text" autocomplete="off" spellcheck="false" title="Mantissa. Tab/click out to apply.">
+    <span class="sep">· 10^</span>
+    <input id="zoom-exp" class="pill num s" type="text" autocomplete="off" spellcheck="false" title="Exponent (integer). Tab/click out to apply.">
+    <span id="zoom-suffix" class="label dim"></span>
+    <span class="sep">·</span>
+    <span id="iter" class="label">iter 0</span>
+  </div>
+  <div class="row">
+    <span class="label">kind</span>
+    <select id="kind-select" class="pill" title="Switch fractal: Mandelbrot iterates z := z² + c per pixel; Julia fixes c and iterates per starting z." style="width:88px">
+      <option value="mandelbrot">mandelbrot</option>
+      <option value="julia">julia</option>
+    </select>
+    <span class="label" id="julia-c-label" style="display:none">c</span>
+    <input id="julia-c-re" class="pill" type="text" value="-0.38" title="Julia c (real). Hit enter to apply." style="width:64px;display:none">
+    <input id="julia-c-im" class="pill" type="text" value="0.61" title="Julia c (imag). Hit enter to apply." style="width:64px;display:none">
+    <span class="label" title="Escape radius — bailout magnitude beyond which the iteration is declared divergent. Standard: 2 (mathematical minimum), 4, 16, 256 (default — smoothest gradients). Shape of the set is unchanged; only the outer-halo colour gradient changes.">esc</span>
+    <input id="escape-radius" class="pill" type="text" value="256" title="Escape radius (bailout). Common: 2, 4, 16, 256. Hit enter to apply." style="width:52px">
+    <span class="label" title="Max iterations per pixel. Empty = auto (zoom-adaptive, starts at 1024 at home zoom and grows with depth). Manually override with a number: higher = cleaner K_c boundary at the cost of render time, lower = fuzzier boundary but faster.">iter</span>
+    <input id="iter-override" class="pill" type="text" placeholder="auto" title="Max iterations per pixel. Empty = auto. Hit enter to apply." style="width:64px">
+    <span class="label">palette</span>
+    <select id="palette" class="pill" title="Colour palette" style="width:96px">
+      <option value="warm" selected>warm</option>
+      <option value="lava">lava</option>
+      <option value="ocean">ocean</option>
+      <option value="electric">electric</option>
+      <option value="rainbow">rainbow</option>
+      <option value="ice">ice</option>
+    </select>
+  </div>
+  <div class="row">
+    <span class="label">re</span>
+    <input id="coord-re" class="pill coord" type="text" value="-0.743643887037151" placeholder="click" title="Real part">
+    <span class="label">im</span>
+    <input id="coord-im" class="pill coord" type="text" value="0.131825904205330" placeholder="click" title="Imaginary part">
+    <!-- "jobs" link to the Jetson render-jobs dashboard removed from UI;
+         stub kept hidden so main.js's jetsonLink reference doesn't crash. -->
+    <a id="jetson-link" class="pill" target="_blank" rel="noopener" style="display:none !important" title="(Jetson backend disabled)">jobs</a>
+    <button id="auto-zoom" class="pill" title="Auto-zoom toward the canvas centre. Click to start/stop.">▶ auto</button>
+    <button id="copy-clipboard" class="pill" title="Copy view to clipboard as PNG.">copy</button>
+    <button id="screenshot" class="pill" title="Download view as PNG file.">screenshot</button>
+    <button id="reset" class="pill" title="Reset view to home.">reset</button>
+  </div>
+  <div class="row">
+    <span class="label">preset</span>
+    <select id="presets" class="pill" style="width:230px" title="Curated zoom locations.">
+      <option value="" selected>—</option>
+      <optgroup label="Shallow (zoom 10² – 10⁵)">
+        <option value="seahorse-valley">Seahorse Valley</option>
+        <option value="elephant-valley">Elephant Valley</option>
+        <option value="triple-spiral-valley">Triple Spiral Valley</option>
+        <option value="seahorse-horn">Seahorse's Horn</option>
+        <option value="elephant-trunk">Elephant's Trunk</option>
+      </optgroup>
+      <optgroup label="Medium (10⁷ – 10⁹) — GPU TD-f32">
+        <option value="line-zero">Line Zero</option>
+        <option value="carousel">Carousel</option>
+        <option value="turbulence">Turbulence</option>
+        <option value="lsd">LSD</option>
+      </optgroup>
+      <optgroup label="Deep (10¹⁰ – 10¹³) — exits GPU mode">
+        <option value="sprites">Sprites</option>
+        <option value="wormhole">Wormhole</option>
+        <option value="praline">Praline</option>
+        <option value="elephants-eye">Elephant's Eye</option>
+        <option value="galaxies">Galaxies</option>
+        <option value="tante-renate">Tante Renate's spot</option>
+      </optgroup>
+      <optgroup label="Misiurewicz (orbit-search test)">
+        <option value="m23-2">M₂₃,₂ — two-arm spiral</option>
+      </optgroup>
+    </select>
+    <select id="julia-presets" class="pill" style="width:230px;display:none" title="Famous Julia c values. Picking one resets the viewport to a whole-set view and re-renders.">
+      <option value="" selected>—</option>
+      <optgroup label="Hyperbolic (connected interior)">
+        <option value="julia-basilica">Basilica — c = −1</option>
+        <option value="julia-rabbit">Douady's Rabbit (period 3)</option>
+        <option value="julia-cauliflower">Cauliflower (rabbit cousin)</option>
+        <option value="julia-airplane">Airplane (period 3 real)</option>
+      </optgroup>
+      <optgroup label="Parabolic / neutral">
+        <option value="julia-san-marco">San Marco — c = −0.75</option>
+        <option value="julia-siegel">Siegel disk</option>
+      </optgroup>
+      <optgroup label="Dendritic (no interior)">
+        <option value="julia-dendrite">Dendrite — c = i</option>
+        <option value="julia-frost">Frost (deep dendrite)</option>
+      </optgroup>
+      <optgroup label="Spirals &amp; lace">
+        <option value="julia-icefractal">Lacy spirals (default)</option>
+        <option value="julia-spirals">Galaxy spirals</option>
+        <option value="julia-lace">Lace</option>
+        <option value="julia-tendrils">Tendrils</option>
+        <option value="julia-storm">Storm</option>
+      </optgroup>
+    </select>
+    <span class="label">cpus</span>
+    <input id="cpu-count" class="pill num s" type="number" min="1" step="1" title="Number of CPU workers (CPU mode, zoom ≥ 10²⁰)">
+    <span class="label">render w</span>
+    <select id="render-width" class="pill" style="width:96px" title="Render width override.">
+      <option value="auto" selected>auto</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+      <option value="400">400</option>
+      <option value="800">800</option>
+      <option value="1920">1920</option>
+    </select>
+    <button id="record" class="pill" title="Open recording panel.">record</button>
+  </div>
+</div>
+
+<!-- legacy modals — same DOM main.js expects, restyled via tokens -->
+<div id="record-modal">
+  <div class="card">
+    <h3>Record</h3>
+    <div class="record-params">
+      <label>duration (s)</label><input id="duration" type="number" value="15" min="1" max="1200" step="1">
+      <label>fps</label><input id="fps" type="number" value="60" min="15" max="120" step="1">
+      <label>zoom ×/s</label><input id="speed" type="number" value="6" min="1.1" max="20" step="0.5">
+    </div>
+    <div class="rec-renderer">
+      <span class="rr-label">renderer</span>
+      <label><input type="radio" name="rec-renderer" value="auto" checked> auto</label>
+      <label><input type="radio" name="rec-renderer" value="gpu"> GPU</label>
+      <label><input type="radio" name="rec-renderer" value="cpu"> CPU</label>
+      <span class="hint">auto = CPU past 10²⁰ zoom</span>
+    </div>
+    <label class="target">
+      <input type="checkbox" id="rec-browser" checked>
+      <span>browser</span>
+      <span class="hint">local, H.264 via WebCodecs</span>
+    </label>
+    <!-- Jetson recording option removed from the UI — no GPU backend deployed.
+         Stub kept hidden so main.js's recJetsonCb / recJetsonLabel / recJetsonHint
+         references don't crash on null. -->
+    <label class="target" id="rec-jetson-label" style="display:none">
+      <input type="checkbox" id="rec-jetson">
+      <span>jetson</span>
+      <span class="hint" id="rec-jetson-hint">checking…</span>
+    </label>
+    <div class="actions">
+      <button id="rec-modal-cancel" class="pill">cancel</button>
+      <button id="rec-modal-start" class="pill">start</button>
+    </div>
+  </div>
+</div>
+
+<div id="stats-modal">
+  <div class="card">
+    <h3>Record complete</h3>
+    <div id="stats-body" class="stats-grid"></div>
+    <div class="actions">
+      <button id="stats-ok" class="pill">ok</button>
+    </div>
+  </div>
+</div>
+
+<div id="arm-bar">
+  <span>Click where you want to zoom in to begin</span>
+  <button id="arm-cancel" class="pill">cancel</button>
+</div>
+
+<div id="progress">
+  <div id="progress-text">…</div>
+  <div id="progress-bar"><div id="progress-fill"></div></div>
+  <button id="progress-cancel" class="pill">cancel</button>
+</div>
+
+<div id="error"></div>
+<div id="snackbar"></div>
+<div id="cpu-status"><span id="cpu-status-text">rendering on CPU…</span></div>
+
+<div id="coord-marker" title="Coordinate from the re/im inputs">
+  <svg viewBox="-9 -9 18 18">
+    <circle class="halo" cx="0" cy="0" r="7"/>
+    <circle class="ring" cx="0" cy="0" r="7"/>
+    <circle class="dot"  cx="0" cy="0" r="2"/>
+  </svg>
+</div>
+
+<aside id="hotkeys" aria-label="keyboard shortcuts">
+  <div class="hk-title">shortcuts</div>
+  <div class="hk-row"><span class="key">click</span><span class="label">zoom in</span></div>
+  <div class="hk-row"><span class="key">⇧+click</span><span class="label">zoom out</span></div>
+  <div class="hk-row"><span class="key">drag</span><span class="label">pan</span></div>
+  <div class="hk-row"><span class="key">space</span><span class="label">zoom in</span></div>
+  <div class="hk-row"><span class="key">⇧+space</span><span class="label">zoom out</span></div>
+  <div class="hk-row"><span class="key">h</span><span class="label">quality tier ↑</span></div>
+  <div class="hk-row"><span class="key">m</span><span class="label">toggle chrome</span></div>
+  <div class="hk-row"><span class="key">⌘ C</span><span class="label">save png</span></div>
+  <div class="hk-row"><span class="key">⌘ ⇧ C</span><span class="label">copy png</span></div>
+  <div class="hk-row"><span class="key">esc</span><span class="label">close modal</span></div>
+  <div class="hk-title" style="margin-top:var(--s-3)">julia</div>
+  <div class="hk-row" style="grid-template-columns:1fr"><span class="label">edit <b style="color:var(--fg)">kind</b> + <b style="color:var(--fg)">c</b> in panel</span></div>
+</aside>
+
+<!-- Julia c-picker: a small Mandelbrot thumbnail. Visible only in Julia mode
+     (body[data-kind="julia"]). Click anywhere on it to set view.juliaC. -->
+<aside id="julia-picker" aria-label="Julia c picker">
+  <div class="jp-title">orbit of c · z := z² + c</div>
+  <canvas id="julia-orbit-canvas" width="280" height="160"></canvas>
+  <div class="jp-title">pick c · click the Mandelbrot</div>
+  <div class="jp-canvas-wrap">
+    <canvas id="julia-picker-canvas" width="280" height="220"></canvas>
+    <div id="julia-picker-marker"></div>
+    <div id="julia-picker-hover"></div>
+  </div>
+  <div class="jp-coords">c = <span id="julia-picker-c">—</span></div>
+</aside>
+
+<div id="brand">
+  <b>calje</b><span class="sep">·</span><span>mandelbrot</span><span class="sep">·</span><span class="acc">z := z² + c</span>
+</div>
+
+<script src="assets/js/fractal-info.js"></script>
+<script>
+  // Menu handle + 'm' hotkey for chrome toggle. Hooked here so it's wired
+  // before main.js (which is a module and would otherwise race the click).
+  const _handle = document.getElementById('handle');
+  _handle.addEventListener('click', () => document.body.classList.toggle('chrome-hidden'));
+  window.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, select, textarea')) return;
+    if (e.key === 'm' || e.key === 'M') {
+      document.body.classList.toggle('chrome-hidden');
+    } else if (e.key === 'Escape') {
+      // 'esc' returns to the atlas — unless a modal is open
+      const modalOpen = document.querySelector('#record-modal.active, #stats-modal.active, #arm-bar.active, #fractal-info-modal.active');
+      if (!modalOpen) location.href = 'index.html';
+    }
+  });
+  // Info "i" button — opens the fractal info dialog. Uses URL kind so it
+  // shows the right entry (mandelbrot vs julia) on this dual-purpose page.
+  document.getElementById('info-btn')?.addEventListener('click', () => {
+    const isJulia = new URLSearchParams(location.search).get('kind') === 'julia';
+    window.showFractalInfo(isJulia ? 'julia' : 'mandelbrot');
+  });
+</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -3,16 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Fractal Atlas · calje</title>
-<link rel="icon" href="favicon.ico" sizes="any" />
-<link rel="stylesheet" href="assets/css/colors_and_type.css" />
-<link rel="stylesheet" href="assets/css/site.css" />
+<title>Fractal Atlas · 12 systems</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+<link rel="stylesheet" href="site.css" />
 </head>
 <body>
 
 <header class="site-header">
   <div class="brand">
-    <a href="https://calje.eu" target="_blank" rel="noopener noreferrer"><b>calje</b></a>
+    <b>calje</b>
     <span class="sep">/</span>
     <span class="acc">fractal atlas</span>
   </div>
@@ -22,25 +21,25 @@
 <section class="site-hero">
   <h1><span class="glyph">∮</span>The unreasonable<br/>geometry of repetition.</h1>
   <p>
-    Twelve canonical systems — complex iterations, recursive cuts, chaotic flows.
-    <span style="color:var(--accent)">Mandelbrot</span> is live with infinite zoom,
-    Game of Life ticks generations, the rest render simpler dynamic JS variants.
+    Twelve canonical systems — complex iterations, recursive cuts, chaotic flows. Each renders
+    to a window. Click to enter. <span style="color:var(--accent)">Mandelbrot</span> is live and
+    explorable; the others are still images for now — palettes and toggle-able chrome included.
   </p>
 </section>
 
 <main id="grid" class="tile-grid"></main>
 
 <footer class="site-footer">
-  <span><span class="acc">∂</span> &nbsp; click any tile to enter</span>
-  <span>canvas 2d · workers · webgpu</span>
+  <span><span class="acc">∂</span> &nbsp; press <kbd class="key" style="display:inline-flex;vertical-align:middle">m</kbd> inside any viewer to toggle the menu</span>
+  <span>renders · canvas 2d · double precision</span>
 </footer>
 
-<script src="assets/js/fractal-info.js"></script>
-<script src="assets/js/fractals.js"></script>
+<script src="fractals.js"></script>
 <script>
   const grid = document.getElementById('grid');
   FRACTALS.forEach((f, i) => {
-    const href = f.href || `fractal.html?type=${f.id}`;
+    const href = f.href || `Fractal.html?type=${f.id}`;
+    const live = f.live ? `<span class="tile__badge live">live</span>` : `<span class="tile__badge">still</span>`;
     const idx = String(i + 1).padStart(2, '0');
     const a = document.createElement('a');
     a.className = 'tile';
@@ -50,7 +49,7 @@
       <div class="tile__body">
         <div class="tile__top">
           <span class="tile__idx">${idx} · ${f.formula || ''}</span>
-          <button class="tile__info" type="button" title="about ${f.name}" aria-label="info">i</button>
+          ${live}
         </div>
         <div>
           <h3 class="tile__name">${f.name}</h3>
@@ -59,13 +58,6 @@
       </div>
       <div class="tile__arrow">→</div>
     `;
-    // Info button — opens the fractal info modal without following the tile link.
-    const infoBtn = a.querySelector('.tile__info');
-    infoBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      window.showFractalInfo(f.id);
-    });
     grid.appendChild(a);
   });
 </script>

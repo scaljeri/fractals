@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Conway's Game of Life · viewer</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+<link rel="stylesheet" href="site.css" />
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  #stage { position: fixed; inset: 0; background: #050605; cursor: crosshair; }
+  #grid {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    image-rendering: pixelated;
+  }
+  /* gen counter chip */
+  .stat-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px;
+  }
+  .stat {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--fg-subtle); letter-spacing: 0.04em;
+  }
+  .stat b { color: var(--fg); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* big play/pause cluster */
+  .transport {
+    display: flex; gap: 6px;
+  }
+  .transport .pill {
+    height: 34px; padding: 0 12px; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .transport .pill.play  { background: var(--accent); color: var(--ink-0); border-color: var(--accent); }
+  .transport .pill.play.paused { background: var(--ink-1); color: var(--fg); border-color: var(--border); }
+  .transport .pill svg { display: block; }
+
+  /* range slider */
+  .slider-row { display: flex; align-items: center; gap: 12px; }
+  .slider {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 4px;
+    background: var(--ink-1);
+    border-radius: 2px;
+    outline: none;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    background: var(--paper-0);
+    border-radius: 50%;
+    border: 1px solid var(--ink-0);
+    cursor: pointer;
+    box-shadow: 0 0 0 2px rgba(124,255,107,0.0);
+    transition: box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .slider:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-glow); }
+  .slider::-moz-range-thumb {
+    width: 16px; height: 16px;
+    background: var(--paper-0);
+    border-radius: 50%;
+    border: 1px solid var(--ink-0);
+    cursor: pointer;
+  }
+
+  /* hint label when paused/running */
+  .pulse {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    animation: pulse 1.4s var(--ease-out) infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .pulse.paused { background: var(--fg-faint); box-shadow: none; animation: none; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+  .menu { width: 380px; }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail" data-bg-color="#070907">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" fill="#070907"/>
+    <g fill="#7CFF6B">
+      <!-- a glider -->
+      <rect x="42" y="38" width="6" height="6"/>
+      <rect x="50" y="44" width="6" height="6"/>
+      <rect x="34" y="50" width="6" height="6"/>
+      <rect x="42" y="50" width="6" height="6"/>
+      <rect x="50" y="50" width="6" height="6"/>
+    </g>
+    <g fill="#7CFF6B" opacity="0.5">
+      <rect x="18" y="22" width="4" height="4"/>
+      <rect x="78" y="26" width="4" height="4"/>
+      <rect x="22" y="74" width="4" height="4"/>
+      <rect x="74" y="70" width="4" height="4"/>
+    </g>
+  </svg>
+</template>
+
+<div id="stage">
+  <canvas id="grid"></canvas>
+</div>
+
+<button id="handle" class="menu-handle" title="toggle menu (m)" aria-label="toggle menu">
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+    <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>
+</button>
+
+<aside id="menu" class="menu">
+  <div class="menu__head">
+    <div class="menu__crumbs">
+      <a href="Home.html">← atlas</a>
+      <span style="color:var(--fg-faint)">·</span>
+      <span>11</span> / 12
+    </div>
+    <h1 class="menu__title">Conway's Game of Life</h1>
+    <p class="menu__desc">
+      A grid of cells, each alive or dead. Rule: a live cell with 2 or 3 neighbours survives;
+      a dead cell with exactly 3 neighbours is born. From these two lines, every motion below emerges.
+    </p>
+    <code class="menu__formula">B3 / S23</code>
+  </div>
+
+  <div class="menu__section">
+    <div class="menu__row">
+      <span class="label">pattern</span>
+      <div id="dropdown" class="dropdown" style="flex:1">
+        <button class="dropdown__btn" id="ddBtn">
+          <span id="ddCurName">Random soup</span>
+          <span class="chev">▾</span>
+        </button>
+        <div class="dropdown__menu" id="ddMenu"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="menu__section">
+    <div class="transport">
+      <button id="play" class="pill play" title="play/pause (space)">
+        <svg id="playIcon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <path d="M1.5 1 8.5 5 1.5 9z"/>
+        </svg>
+        <span id="playLbl">play</span>
+      </button>
+      <button id="step" class="pill" title="step (n)">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <path d="M1.5 1 7 5 1.5 9z"/>
+          <rect x="7.5" y="1" width="1.4" height="8"/>
+        </svg>
+        <span>step</span>
+      </button>
+      <button id="reset" class="pill" title="reload current pattern (r)">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 6a4 4 0 1 0 1.2-2.8L2 4.5"/>
+          <path d="M2 1.5v3h3"/>
+        </svg>
+        <span>reset</span>
+      </button>
+      <button id="clear" class="pill" title="clear grid (c)">
+        <span style="font-size:14px;line-height:1">⨯</span>
+        <span>clear</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="menu__section">
+    <div class="slider-row">
+      <span class="label" style="min-width:48px">speed</span>
+      <input id="speed" type="range" min="1" max="60" value="12" class="slider" />
+      <span class="stat"><b id="speedVal">12</b> gen/s</span>
+    </div>
+  </div>
+
+  <div class="menu__section">
+    <div class="stat-row">
+      <span class="stat"><span id="liveDot" class="pulse"></span><b id="state">running</b></span>
+      <span class="stat">gen <b id="gen">0</b></span>
+      <span class="stat">alive <b id="alive">0</b></span>
+    </div>
+  </div>
+
+  <div class="menu__section">
+    <div class="legend">
+      <kbd class="key">m</kbd><span>menu</span>
+      <span class="sep">·</span>
+      <kbd class="key">space</kbd><span>play / pause</span>
+      <span class="sep">·</span>
+      <kbd class="key">n</kbd><span>step</span>
+      <span class="sep">·</span>
+      <kbd class="key">r</kbd><span>reset</span>
+      <span class="sep">·</span>
+      <kbd class="key">c</kbd><span>clear</span>
+      <span class="sep">·</span>
+      <kbd class="key">[</kbd><kbd class="key">]</kbd><span>speed</span>
+      <span class="sep">·</span>
+      <kbd class="key">esc</kbd><span>atlas</span>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--fg-subtle)">
+      drag on the grid to draw cells. each click toggles.
+    </div>
+  </div>
+</aside>
+
+<div id="toast" class="toast">—</div>
+
+<script src="game-of-life-patterns.js"></script>
+<script src="game-of-life.js"></script>
+</body>
+</html>

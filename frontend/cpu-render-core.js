@@ -51,10 +51,18 @@ export function ddScalePow2(ah, al, e) {
 // Returns { escaped, iter, Zre, Zim } so the caller can do the smoothing
 // formula + palette lookup.
 export function iteratePixel(deltaReH, deltaReL, deltaImH, deltaImL, frameExp,
-                             orbit, orbitLen, maxIter) {
-  let wReH = 0, wReL = 0, wImH = 0, wImL = 0;
-  let wExp = frameExp;                // w starts at 0, but align its exponent
-                                      // to delta so the first step has no shift
+                             orbit, orbitLen, maxIter, kind = 'mandelbrot') {
+  // Mandelbrot: w₀ = 0 (both pixel & ref orbits start at 0).
+  // Julia:      w₀ = δz (pixel starts at view-pixel; ref at view-centre).
+  // Either way, w_exp aligns with delta_exp so the first step has no shift.
+  let wReH, wReL, wImH, wImL;
+  if (kind === 'julia') {
+    wReH = deltaReH; wReL = deltaReL;
+    wImH = deltaImH; wImL = deltaImL;
+  } else {
+    wReH = 0; wReL = 0; wImH = 0; wImL = 0;
+  }
+  let wExp = frameExp;
   const deltaExp = frameExp;
 
   let refI = 0;
@@ -91,6 +99,16 @@ export function iteratePixel(deltaReH, deltaReL, deltaImH, deltaImL, frameExp,
       const zImDDL = orbit[refI * 4 + 3];
       [wReH, wReL] = ddAdd(zReDD, zReDDL, wReAt0H, wReAt0L);
       [wImH, wImL] = ddAdd(zImDD, zImDDL, wImAt0H, wImAt0L);
+      // Julia: w must be expressed in the new reference frame as (z_actual − Z[0]).
+      // Mandelbrot's Z[0] = 0 so the subtract would be a no-op (skip it). For
+      // Julia, Z[0] = z_ref, and skipping the subtract leaks z_ref into w on
+      // every rebase — that's the "Julia deep zoom degrades fast" bug.
+      if (kind === 'julia') {
+        const z0ReH = orbit[0], z0ReL = orbit[1];
+        const z0ImH = orbit[2], z0ImL = orbit[3];
+        [wReH, wReL] = ddSub(wReH, wReL, z0ReH, z0ReL);
+        [wImH, wImL] = ddSub(wImH, wImL, z0ImH, z0ImL);
+      }
       wExp = 0;
       refI = 0;
       continue;
@@ -120,13 +138,16 @@ export function iteratePixel(deltaReH, deltaReL, deltaImH, deltaImL, frameExp,
     const [t1ImH, t1ImL] = ddScalePow2(twoZwImH, twoZwImL, wExp - targetExp);
     const [t2ReH, t2ReL] = ddScalePow2(wsqReH, wsqReL, 2 * wExp - targetExp);
     const [t2ImH, t2ImL] = ddScalePow2(wrwiH, wrwiL, 2 * wExp - targetExp);
-    const [t3ReH, t3ReL] = ddScalePow2(deltaReH, deltaReL, deltaExp - targetExp);
-    const [t3ImH, t3ImL] = ddScalePow2(deltaImH, deltaImL, deltaExp - targetExp);
 
+    // Mandelbrot adds δc each iter; Julia's δc is 0 (c identical for pixel and ref).
     let [sumReH, sumReL] = ddAdd(t1ReH, t1ReL, t2ReH, t2ReL);
-    [sumReH, sumReL] = ddAdd(sumReH, sumReL, t3ReH, t3ReL);
     let [sumImH, sumImL] = ddAdd(t1ImH, t1ImL, t2ImH, t2ImL);
-    [sumImH, sumImL] = ddAdd(sumImH, sumImL, t3ImH, t3ImL);
+    if (kind !== 'julia') {
+      const [t3ReH, t3ReL] = ddScalePow2(deltaReH, deltaReL, deltaExp - targetExp);
+      const [t3ImH, t3ImL] = ddScalePow2(deltaImH, deltaImL, deltaExp - targetExp);
+      [sumReH, sumReL] = ddAdd(sumReH, sumReL, t3ReH, t3ReL);
+      [sumImH, sumImL] = ddAdd(sumImH, sumImL, t3ImH, t3ImL);
+    }
 
     const peak = Math.max(Math.abs(sumReH), Math.abs(sumImH));
     let shift = 0;
@@ -162,10 +183,16 @@ export function iteratePixel(deltaReH, deltaReL, deltaImH, deltaImL, frameExp,
 //   orbit:            Float64Array, 8 doubles/orbit-point.
 //   orbitLen, maxIter: same as DD path.
 // Returns same shape as iteratePixel: { escaped, iter, Zre, Zim }.
-export function iteratePixelQD(deltaRe, deltaIm, orbit, orbitLen, maxIter) {
-  // w starts at 0 (zero-initialised Float64Array).
-  let wRe = new Float64Array(4);
-  let wIm = new Float64Array(4);
+export function iteratePixelQD(deltaRe, deltaIm, orbit, orbitLen, maxIter, kind = 'mandelbrot') {
+  // Mandelbrot: w₀ = 0. Julia: w₀ = δz (per-pixel offset).
+  let wRe, wIm;
+  if (kind === 'julia') {
+    wRe = Float64Array.from(deltaRe);
+    wIm = Float64Array.from(deltaIm);
+  } else {
+    wRe = new Float64Array(4);
+    wIm = new Float64Array(4);
+  }
 
   let refI = 0;
   let actualI = 0;
@@ -200,6 +227,14 @@ export function iteratePixelQD(deltaRe, deltaIm, orbit, orbitLen, maxIter) {
       const zImCopy = Float64Array.from(zImView);
       wRe = qdAdd(zReCopy, wRe);
       wIm = qdAdd(zImCopy, wIm);
+      // Same Julia rebase correction as the DD path — subtract Z[0] so w lands
+      // in the new reference frame. Mandelbrot's Z[0] = 0 → skip.
+      if (kind === 'julia') {
+        const z0ReCopy = Float64Array.from(orbit.subarray(0, 4));
+        const z0ImCopy = Float64Array.from(orbit.subarray(4, 8));
+        wRe = qdSub(wRe, z0ReCopy);
+        wIm = qdSub(wIm, z0ImCopy);
+      }
       refI = 0;
       continue;
     }
@@ -222,9 +257,14 @@ export function iteratePixelQD(deltaRe, deltaIm, orbit, orbitLen, maxIter) {
     const wsqRe = qdSub(wrSq, wiSq);
     const wsqIm = qdMulPow2(qdMul(wRe, wIm), 1);
 
-    // Sum into next w
-    wRe = qdAdd(qdAdd(twoZwRe, wsqRe), deltaRe);
-    wIm = qdAdd(qdAdd(twoZwIm, wsqIm), deltaIm);
+    // Sum into next w. Julia drops +δc (c is identical for pixel & ref).
+    if (kind === 'julia') {
+      wRe = qdAdd(twoZwRe, wsqRe);
+      wIm = qdAdd(twoZwIm, wsqIm);
+    } else {
+      wRe = qdAdd(qdAdd(twoZwRe, wsqRe), deltaRe);
+      wIm = qdAdd(qdAdd(twoZwIm, wsqIm), deltaIm);
+    }
 
     refI++;
     actualI++;
@@ -243,6 +283,7 @@ export function renderTileQD({
   scaleQD,            // Float64Array(4)
   deltaReQD, deltaImQD, // Float64Array(4) each
   maxIter, palette: pal,
+  kind = 'mandelbrot',
   onRowProgress,
 }) {
   const aspect = canvasW / canvasH;
@@ -264,7 +305,7 @@ export function renderTileQD({
       const dxCol = qdMul(scaleAspectQD, uvxQD);
       const pxDx = qdAdd(deltaReQD, dxCol);
 
-      const r = iteratePixelQD(pxDx, pxDy, orbit, orbitLen, maxIter);
+      const r = iteratePixelQD(pxDx, pxDy, orbit, orbitLen, maxIter, kind);
       const pxIdx = (py * tileW + px) * 4;
       if (!r.escaped) {
         pixels[pxIdx + 3] = 255;
@@ -314,6 +355,7 @@ export function renderTile({
   scaleMantHi, scaleMantLo, frameExp,
   deltaReHi, deltaReLo, deltaImHi, deltaImLo,
   maxIter, palette: pal,
+  kind = 'mandelbrot',
   onRowProgress,
 }) {
   const aspect = canvasW / canvasH;
@@ -334,7 +376,7 @@ export function renderTile({
 
       const r = iteratePixel(
         pxDxH, pxDxL, pxDyH, pxDyL, frameExp,
-        orbit, orbitLen, maxIter
+        orbit, orbitLen, maxIter, kind
       );
       const pxIdx = (py * tileW + px) * 4;
       if (!r.escaped) {

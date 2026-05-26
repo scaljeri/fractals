@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Fractal · viewer</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+<link rel="stylesheet" href="site.css" />
+</head>
+<body>
+
+<div class="viewer">
+  <img id="img" class="viewer__img" alt="" />
+  <div class="viewer__scanlines"></div>
+</div>
+
+<button id="handle" class="menu-handle" title="toggle menu (m)" aria-label="toggle menu">
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+    <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>
+</button>
+
+<aside id="menu" class="menu">
+  <div class="menu__head">
+    <div class="menu__crumbs">
+      <a href="Home.html">← atlas</a>
+      <span style="color:var(--fg-faint)">·</span>
+      <span id="crumbIdx">01</span> / 12
+    </div>
+    <h1 id="title" class="menu__title">—</h1>
+    <p id="desc" class="menu__desc">—</p>
+    <code id="formula" class="menu__formula"></code>
+  </div>
+
+  <div class="menu__section">
+    <div class="menu__row">
+      <span class="label">explore</span>
+      <div id="dropdown" class="dropdown" style="flex:1">
+        <button class="dropdown__btn" id="ddBtn">
+          <span id="ddCurName">—</span>
+          <span class="chev">▾</span>
+        </button>
+        <div class="dropdown__menu" id="ddMenu"></div>
+      </div>
+    </div>
+
+    <div id="paletteRow" class="menu__row">
+      <span class="label">palette</span>
+      <div id="swatches" class="swatches"></div>
+    </div>
+  </div>
+
+  <div class="menu__section">
+    <div class="cta-row">
+      <button id="copyBtn"   class="pill"><span>copy link</span><span style="color:var(--fg-subtle);margin-left:auto">⌃C</span></button>
+      <button id="shotBtn"   class="pill"><span>save PNG</span><span style="color:var(--fg-subtle);margin-left:auto">⌃⇧C</span></button>
+      <a id="liveBtn" class="pill primary" style="display:none">explore live →</a>
+    </div>
+  </div>
+
+  <div class="menu__section">
+    <div class="legend">
+      <kbd class="key">m</kbd><span>menu</span>
+      <span class="sep">·</span>
+      <kbd class="key">←</kbd><kbd class="key">→</kbd><span>navigate</span>
+      <span class="sep">·</span>
+      <kbd class="key">esc</kbd><span>atlas</span>
+      <span class="sep">·</span>
+      <kbd class="key">p</kbd><span>cycle palette</span>
+    </div>
+  </div>
+</aside>
+
+<div id="toast" class="toast">—</div>
+
+<script src="fractals.js"></script>
+<script src="fractal-viewer.js"></script>
+</body>
+</html>

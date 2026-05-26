@@ -1,0 +1,209 @@
+/* ============================================================
+   CALJE DESIGN SYSTEM — colors + type tokens
+   Dark-first terminal aesthetic. Phosphor green accent on
+   near-black ink with warm-ivory paper.
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  /* ---------- INK + PAPER ---------- */
+  --ink-0:   #0A0A0A;
+  --ink-1:   #111111;
+  --ink-2:   #1A1A1A;
+  --ink-3:   #242424;
+  --ink-4:   #3A3A3A;
+
+  --paper-0: #F2F0EA;
+  --paper-1: #C9C7C0;
+  --paper-2: #8A8881;
+  --paper-3: #5A5853;
+
+  /* ---------- ACCENT + GLITCH ---------- */
+  --accent:        #7CFF6B;
+  --accent-dim:    #4FCC42;
+  --accent-glow:   rgba(124, 255, 107, 0.35);
+
+  --glitch-red:    #FF3D5A;
+  --glitch-cyan:   #00E5FF;
+  --glitch-amber:  #F5C518;
+
+  /* ---------- SEMANTIC ALIASES ---------- */
+  --bg:           var(--ink-0);
+  --bg-raised:    var(--ink-1);
+  --bg-hover:     var(--ink-2);
+  --fg:           var(--paper-0);
+  --fg-muted:     var(--paper-1);
+  --fg-subtle:    var(--paper-2);
+  --fg-faint:     var(--paper-3);
+  --border:       var(--ink-3);
+  --border-strong:var(--ink-4);
+  --link:         var(--accent);
+  --link-press:   var(--accent-dim);
+
+  /* ---------- TYPE FAMILIES ---------- */
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans:    "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-mono); /* display IS mono — that's the bit */
+
+  /* ---------- TYPE SCALE (modular, 1.25) ---------- */
+  --t-12: 0.75rem;     /* metadata, tags */
+  --t-14: 0.875rem;    /* small body, captions */
+  --t-16: 1rem;        /* body */
+  --t-18: 1.125rem;    /* lead body */
+  --t-22: 1.375rem;    /* h4 */
+  --t-28: 1.75rem;     /* h3 */
+  --t-36: 2.25rem;     /* h2 */
+  --t-48: 3rem;        /* h1 */
+  --t-72: 4.5rem;      /* display */
+  --t-96: 6rem;        /* hero */
+
+  /* ---------- WEIGHTS ---------- */
+  --w-regular: 400;
+  --w-medium:  500;
+  --w-semibold:600;
+  --w-bold:    700;
+
+  /* ---------- LINE HEIGHT ---------- */
+  --lh-tight:  1.05;
+  --lh-snug:   1.2;
+  --lh-normal: 1.5;
+  --lh-loose:  1.7;
+
+  /* ---------- TRACKING ---------- */
+  --tr-tight:  -0.02em;
+  --tr-normal: 0em;
+  --tr-wide:   0.04em;
+  --tr-wider:  0.12em; /* uppercase eyebrows */
+
+  /* ---------- SPACING (4px base) ---------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+  --s-10:128px;
+
+  /* ---------- RADII — small. always small. ---------- */
+  --r-0: 0px;
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-3: 8px;
+  --r-pill: 999px;
+
+  /* ---------- SHADOWS ---------- */
+  --shadow-glow:  0 0 0 1px var(--accent-glow), 0 0 24px var(--accent-glow);
+  --shadow-card:  0 1px 0 0 var(--ink-3), 0 12px 32px -16px rgba(0,0,0,0.6);
+  --shadow-inset: inset 0 0 0 1px var(--ink-3);
+
+  /* ---------- MOTION ---------- */
+  --ease-out:    cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snap:   cubic-bezier(0.4, 0, 0.1, 1);
+  --dur-fast:    120ms;
+  --dur-base:    220ms;
+  --dur-slow:    480ms;
+}
+
+/* ---------- LIGHT THEME (inverted) ---------- */
+:root[data-theme="light"] {
+  --bg:           #F2F0EA;
+  --bg-raised:    #FFFFFF;
+  --bg-hover:     #E9E7E0;
+  --fg:           #111111;
+  --fg-muted:     #3A3A3A;
+  --fg-subtle:    #6A6862;
+  --fg-faint:     #9A9892;
+  --border:       #D8D6CF;
+  --border-strong:#B8B6AF;
+  --link:         #1F8A2E;
+  --link-press:   #166D22;
+}
+
+/* ============================================================
+   SEMANTIC TYPE PRIMITIVES
+   ============================================================ */
+
+.t-display {
+  font-family: var(--font-display);
+  font-size: var(--t-96);
+  font-weight: var(--w-bold);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tr-tight);
+}
+
+.t-h1 {
+  font-family: var(--font-display);
+  font-size: var(--t-48);
+  font-weight: var(--w-bold);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tr-tight);
+}
+
+.t-h2 {
+  font-family: var(--font-display);
+  font-size: var(--t-36);
+  font-weight: var(--w-bold);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tr-tight);
+}
+
+.t-h3 {
+  font-family: var(--font-display);
+  font-size: var(--t-28);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-snug);
+}
+
+.t-h4 {
+  font-family: var(--font-sans);
+  font-size: var(--t-22);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-snug);
+}
+
+.t-body {
+  font-family: var(--font-sans);
+  font-size: var(--t-16);
+  font-weight: var(--w-regular);
+  line-height: var(--lh-normal);
+  color: var(--fg-muted);
+}
+
+.t-lead {
+  font-family: var(--font-sans);
+  font-size: var(--t-18);
+  line-height: var(--lh-normal);
+  color: var(--fg);
+}
+
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-14);
+  letter-spacing: var(--tr-normal);
+}
+
+.t-eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  font-weight: var(--w-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-wider);
+  color: var(--accent);
+}
+
+.t-meta {
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  color: var(--fg-subtle);
+}
+
+/* prompt prefix glyph used a lot in the system */
+.t-prompt::before {
+  content: "$ ";
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
