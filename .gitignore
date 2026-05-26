@@ -26,6 +26,10 @@ venv/
 .env.local
 .env.*.local
 
+# Personal deploy commands (per-machine, may contain hostnames/paths)
+DEPLOY.local.md
+*.local.md
+
 # Render outputs (generated, large, regenerable)
 *.ppm
 frontend/render-*.ppm
