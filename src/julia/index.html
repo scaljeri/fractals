@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Julia · calje</title>
+<link rel="icon" href="../../favicon.ico" sizes="any" />
+<script>
+  // Julia uses the same deep-zoom engine as Mandelbrot — the only difference
+  // is `kind=julia` (+ default c-value) injected via URL params. Set defaults
+  // here BEFORE the engine module loads so `?` params win for repeat visitors
+  // but a clean URL still lands on Julia with the canonical c.
+  (() => {
+    const u = new URLSearchParams(location.search);
+    if (!u.has('kind')) u.set('kind', 'julia');
+    if (!u.has('jre'))  u.set('jre',  '-0.38');
+    if (!u.has('jim'))  u.set('jim',  '0.61');
+    const next = '?' + u.toString();
+    if (location.search !== next) history.replaceState({}, '', next);
+  })();
+  // Redirect to the mandelbrot engine page — the engine renders Julia when
+  // ?kind=julia is set. Keeping a dedicated /src/julia/ URL means link
+  // discoverability + a clean "atlas → julia" route from the home page.
+  location.replace('../mandelbrot/' + location.search);
+</script>
+</head>
+<body>
+<noscript>
+  <p>Julia mode requires JavaScript. Open
+  <a href="../mandelbrot/?kind=julia&amp;jre=-0.38&amp;jim=0.61">
+    /src/mandelbrot/?kind=julia&amp;jre=-0.38&amp;jim=0.61
+  </a> directly.</p>
+</noscript>
+</body>
+</html>

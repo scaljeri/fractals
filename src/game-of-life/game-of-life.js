@@ -18,11 +18,26 @@ let next    = new Uint8Array(0);
 let age     = new Uint16Array(0);
 let generation = 0;
 let aliveCount = 0;
+let aliveMax = 0;          // peak alive count since last pattern (re)load or clear
 
 let running = false;
 let speed   = 12;                  // generations per second
 let lastTick = 0;
 let currentPatternId = 'soup';
+
+// Wall-clock timer: accumulates running-state time only. Frozen on pause,
+// resumed on play, zeroed when a pattern is (re)loaded or the grid is cleared.
+let timeMs = 0;            // sum of completed play-segments
+let runStartTs = 0;        // performance.now() at the start of the current run-segment (0 when paused)
+
+// Auto-pause when the grid enters a loop — current hash matches any
+// of the previous LOOP_WINDOW hashes. Catches static blobs (period 1),
+// blinker/toad (period 2), and any oscillator up to period LOOP_WINDOW.
+// LEAVES gliders / spaceships alone — their grid translates each step,
+// so the hash never repeats. Glider guns keep adding cells, so hash
+// keeps changing. Pure chaos: hashes wander, no loop, keeps running.
+const LOOP_WINDOW = 32;
+let gridHashes = [];       // ring buffer of recent post-step grid hashes
 
 /* ---------------- canvas sizing ---------------- */
 function resize() {
@@ -59,32 +74,63 @@ window.addEventListener('resize', resize);
 /* ---------------- core step ---------------- */
 function step() {
   let total = 0;
+  // Position-weighted XOR of alive-cell indices, folded into the main loop.
+  // Knuth's 0x9E3779B9 multiplier scrambles indices; XORing alive-cell
+  // contributions yields an order-independent, position-sensitive hash.
+  let hash = 0;
   for (let y = 0; y < rows; y++) {
     const yu = (y - 1 + rows) % rows;
     const yd = (y + 1) % rows;
     for (let x = 0; x < cols; x++) {
       const xl = (x - 1 + cols) % cols;
       const xr = (x + 1) % cols;
+      const idx = y * cols + x;
       const n = grid[yu*cols+xl] + grid[yu*cols+x] + grid[yu*cols+xr]
               + grid[y*cols+xl]                    + grid[y*cols+xr]
               + grid[yd*cols+xl] + grid[yd*cols+x] + grid[yd*cols+xr];
-      const a = grid[y*cols+x];
+      const a = grid[idx];
       const nv = a ? (n === 2 || n === 3 ? 1 : 0) : (n === 3 ? 1 : 0);
-      next[y*cols+x] = nv;
-      if (nv) { total++; age[y*cols+x] = Math.min(420, age[y*cols+x] + 1); }
-      else    { age[y*cols+x] = 0; }
+      next[idx] = nv;
+      if (nv) {
+        total++;
+        age[idx] = Math.min(420, age[idx] + 1);
+        hash ^= ((idx + 1) * 0x9E3779B9) | 0;
+      } else {
+        age[idx] = 0;
+      }
     }
   }
   // swap
   const tmp = grid; grid = next; next = tmp;
   generation++;
   aliveCount = total;
+  if (aliveCount > aliveMax) aliveMax = aliveCount;
+
+  // Loop detection: does the new hash match any of the last LOOP_WINDOW?
+  // Period = how far back the match sits in the ring buffer (1 = static).
+  // Guarded by `running` so manual step-button presses don't trip it.
+  if (running) {
+    for (let k = gridHashes.length - 1; k >= 0; k--) {
+      if (gridHashes[k] === hash) {
+        const period = gridHashes.length - k;
+        setRunning(false);
+        const label = aliveCount === 0 ? 'extinct'
+                    : period === 1     ? 'static'
+                                       : `period ${period}`;
+        toastMsg(`${label} — paused`);
+        return;
+      }
+    }
+  }
+  gridHashes.push(hash);
+  if (gridHashes.length > LOOP_WINDOW) gridHashes.shift();
 }
 
 function recountAlive() {
   let t = 0;
   for (let i = 0; i < grid.length; i++) if (grid[i]) t++;
   aliveCount = t;
+  if (aliveCount > aliveMax) aliveMax = aliveCount;
 }
 
 /* ---------------- drawing ---------------- */
@@ -120,7 +166,9 @@ function draw() {
 /* ---------------- patterns ---------------- */
 function clearGrid() {
   grid.fill(0); next.fill(0); age.fill(0);
-  generation = 0; aliveCount = 0;
+  generation = 0; aliveCount = 0; aliveMax = 0;
+  gridHashes = [];
+  resetTimer();
   updateStats();
 }
 
@@ -167,12 +215,25 @@ function loadPattern(id) {
     recountAlive();
   }
   generation = 0;
+  resetTimer();
   draw();
   updateStats();
 }
 
 /* ---------------- transport ---------------- */
 function setRunning(r) {
+  // Track timer transitions BEFORE flipping `running` so resetTimer reads
+  // the previous state correctly if it gets called from a downstream handler.
+  if (r && !running) {
+    runStartTs = performance.now();
+    // Fresh play-segment: drop stale hashes so loop detection doesn't
+    // fire instantly after a pause→play round trip (and so the user
+    // can resume an already-static pattern for inspection).
+    gridHashes = [];
+  } else if (!r && running) {
+    timeMs += performance.now() - runStartTs;
+    runStartTs = 0;
+  }
   running = r;
   $('playLbl').textContent = running ? 'pause' : 'play';
   $('playIcon').innerHTML = running
@@ -185,6 +246,29 @@ function setRunning(r) {
     lastTick = performance.now();
     requestAnimationFrame(loop);
   }
+  // Refresh stats so the timer text freezes on pause (and re-renders on resume).
+  updateStats();
+}
+
+function currentElapsedMs() {
+  return timeMs + (running && runStartTs ? performance.now() - runStartTs : 0);
+}
+
+function resetTimer() {
+  timeMs = 0;
+  // If a reset fires mid-run (e.g. dropdown swap while playing), restart the
+  // current segment so the clock keeps ticking from zero instead of stalling.
+  runStartTs = running ? performance.now() : 0;
+}
+
+function fmtTime(ms) {
+  const s = Math.floor(ms / 1000);
+  const ss = String(s % 60).padStart(2, '0');
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}:${ss}`;
+  const mm = String(m % 60).padStart(2, '0');
+  const h = Math.floor(m / 60);
+  return `${h}:${mm}:${ss}`;
 }
 
 function loop(t) {
@@ -200,8 +284,10 @@ function loop(t) {
 }
 
 function updateStats() {
-  $('gen').textContent   = generation;
-  $('alive').textContent = aliveCount;
+  $('gen').textContent      = generation;
+  $('alive').textContent    = aliveCount;
+  $('aliveMax').textContent = aliveMax;
+  $('elapsed').textContent  = fmtTime(currentElapsedMs());
 }
 
 /* ---------------- dropdown ---------------- */
@@ -291,7 +377,7 @@ window.addEventListener('keydown', (e) => {
     setRunning(false); clearGrid(); draw();
   }
   else if (e.key === 'm' || e.key === 'M') { menu.classList.toggle('hidden'); }
-  else if (e.key === 'Escape') { location.href = 'index.html'; }
+  else if (e.key === 'Escape') { location.href = '../../index.html'; }
   else if (e.key === '[') { speed = Math.max(1, speed - 2); $('speed').value = speed; $('speedVal').textContent = speed; toastMsg('speed ' + speed); }
   else if (e.key === ']') { speed = Math.min(60, speed + 2); $('speed').value = speed; $('speedVal').textContent = speed; toastMsg('speed ' + speed); }
 });

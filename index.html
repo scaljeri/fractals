@@ -42,12 +42,12 @@
   <span>canvas 2d · workers · webgpu</span>
 </footer>
 
-<script src="assets/js/fractal-info.js"></script>
-<script src="assets/js/fractals.js"></script>
+<script src="src/utils/fractal-info.js"></script>
+<script src="src/utils/fractals.js"></script>
 <script>
   const grid = document.getElementById('grid');
   FRACTALS.forEach((f, i) => {
-    const href = f.href || `fractal.html?type=${f.id}`;
+    const href = f.href || `src/${f.id.replace(/_/g, '-')}/`;
     const idx = String(i + 1).padStart(2, '0');
     const a = document.createElement('a');
     a.className = 'tile';

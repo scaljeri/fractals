@@ -580,8 +580,6 @@ if (juliaPresetSelect) {
 }
 
 // IQ cosine palette presets: colour(t) = a + b * cos(2π(c·t + d)).
-// Names here must match jetson/src/worker.py PALETTES so Jetson-rendered videos
-// look identical to in-browser previews/recordings.
 const PALETTES = {
   warm:     { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [1.0, 1.0, 1.0], d: [0.00, 0.10, 0.20] },
   lava:     { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [1.0, 0.7, 0.4], d: [0.00, 0.15, 0.20] },
@@ -3551,7 +3549,7 @@ canvas.addEventListener('pointerdown', (e) => {
     const pending = pendingClickRecord;
     pendingClickRecord = null;
     disarmRecord();
-    const recordPromise = startRecordingWithTarget(tx, ty, pending?.framesOverride, pending?.backend ?? 'auto');
+    const recordPromise = startRecordingWithTarget(tx, ty, pending?.backend ?? 'auto');
     if (pending) recordPromise.then(pending.resolve, pending.reject);
     return;
   }
@@ -4458,16 +4456,9 @@ async function recordVideo({ totalFrames, fps, zoomIn, backend = 'auto' }) {
   }
 }
 
-// Shared progress state. Both backends feed into the same counters so the
-// progress bar shows combined frames, elapsed time, and per-backend counts
-// + fps — the stats that used to live in a separate post-record dialog.
 const recordProgress = {
   total: 0,
-  // Targets are what each backend was ASKED to render. Used to decide which
-  // backend rows to show pre-emptively (so "jetson 0 @ — fps" appears while
-  // the Jetson is still submitting, instead of the user wondering where it is).
-  browserTarget: 0, jetsonTarget: 0,
-  browserDone: 0, jetsonDone: 0,
+  done: 0,
   startedAt: 0,
   // Set to performance.now() when the record stops — freezes the elapsed-time
   // field so the clock doesn't keep ticking after completion.
@@ -4475,12 +4466,9 @@ const recordProgress = {
 };
 let progressTicker = null;
 
-function resetRecordProgress({ total, browserTarget, jetsonTarget }) {
+function resetRecordProgress({ total }) {
   recordProgress.total = total;
-  recordProgress.browserTarget = browserTarget;
-  recordProgress.jetsonTarget = jetsonTarget;
-  recordProgress.browserDone = 0;
-  recordProgress.jetsonDone = 0;
+  recordProgress.done = 0;
   recordProgress.startedAt = performance.now();
   recordProgress.stoppedAt = 0;
   renderRecordProgress();
@@ -4512,31 +4500,17 @@ function fmtFps(frames, ms) {
 }
 
 function renderRecordProgress() {
-  const b = recordProgress.browserDone;
-  const j = recordProgress.jetsonDone;
-  const done = b + j;
+  const done = recordProgress.done;
   const total = recordProgress.total || 1;
   const ms = elapsedMsNow();
-
-  // Header: combined progress + elapsed.
-  const parts = [`${done} / ${total} frames`, fmtElapsed(ms)];
-  // Per-backend rows — show both frame count and fps so the user can compare
-  // contributions directly (instead of decoding an opaque 55/45 share).
-  if (recordProgress.browserTarget > 0) {
-    parts.push(`browser ${b} @ ${fmtFps(b, ms)}`);
-  }
-  if (recordProgress.jetsonTarget > 0) {
-    parts.push(`jetson ${j} @ ${fmtFps(j, ms)}`);
-  }
-
-  progressText.textContent = parts.join(' · ');
+  progressText.textContent = `${done} / ${total} frames · ${fmtElapsed(ms)} · ${fmtFps(done, ms)}`;
   progressFill.style.width = `${Math.min(100, (done / total) * 100)}%`;
 }
 
 function updateProgress(done, total) {
   // Called from the browser record loop — we ignore `total` here because the
   // overall total is set once (per record) by the modal orchestrator.
-  recordProgress.browserDone = done;
+  recordProgress.done = done;
   renderRecordProgress();
 }
 
@@ -4547,9 +4521,8 @@ function setProgressVisible(v) {
 const armBar = document.getElementById('arm-bar');
 const armCancel = document.getElementById('arm-cancel');
 let armingForRecord = false;
-// When the modal is in "browser → jetson" sequential mode and the browser half
-// needs a click to pick its target, we set this so the pointerdown handler can
-// chain the recording's completion back to the modal's orchestrator.
+// When the modal needs a click to pick its target, we set this so the pointerdown
+// handler can chain the recording's completion back to the modal's orchestrator.
 let pendingClickRecord = null;
 
 function armRecord() {
@@ -4593,19 +4566,8 @@ function readSpeed() {
   return Math.max(1.01, parseFloat(speedInput.value) || 6);
 }
 
-// Split-mode handshake between the modal and the browser recorder. When
-// `holdBrowserBlob` is true, the recorder stashes the produced mp4 into
-// `pendingBrowserBlob` for the modal to upload to the Jetson /merge endpoint —
-// otherwise the recorder auto-downloads as before.
-let holdBrowserBlob = false;
-let pendingBrowserBlob = null;
-
-// Optional `framesOverride` lets the caller cap recording length (used by the
-// split-mode modal so the browser only records [0, split) and the Jetson
-// picks up [split, total)).
-async function startRecordingWithTarget(targetCx, targetCy, framesOverride, backend = 'auto') {
-  const fullFrames = readTotalFrames();
-  const totalFrames = framesOverride != null ? Math.max(2, framesOverride) : fullFrames;
+async function startRecordingWithTarget(targetCx, targetCy, backend = 'auto') {
+  const totalFrames = readTotalFrames();
   const fps = Math.max(15, Math.min(120, parseInt(fpsInput.value, 10) || 60));
   const zoomIn = zoomFactorPerFrame(readSpeed(), fps);
 
@@ -4625,26 +4587,14 @@ async function startRecordingWithTarget(targetCx, targetCy, framesOverride, back
     const elapsed = performance.now() - recordT0;
     if (blob) {
       stats = { success: true, frames: totalFrames, elapsedMs: elapsed };
-      // Remember wall-clock ms/frame so the next split-mode record can hand
-      // the Jetson a fair share of the work instead of a blind 50/50.
-      const msPerFrame = elapsed / totalFrames;
-      if (isFinite(msPerFrame) && msPerFrame > 0) {
-        localStorage.setItem(BROWSER_MS_PER_FRAME_KEY, msPerFrame.toFixed(2));
-      }
-      // Split mode: hold the blob for the modal to upload to /merge. Otherwise
-      // download immediately as before.
-      if (holdBrowserBlob) {
-        pendingBrowserBlob = blob;
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `mandelbrot-${Date.now()}.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mandelbrot-${Date.now()}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
     }
   } catch (e) {
     console.error(e);
@@ -4654,9 +4604,6 @@ async function startRecordingWithTarget(targetCx, targetCy, framesOverride, back
     Object.assign(view, savedView);
     recordBtn.disabled = false;
     resetBtn.disabled = false;
-    // NOTE: progress bar stays visible — the modal orchestrator hides it once
-    // both backends finish, otherwise the faster one would clear the bar while
-    // the slower one is still working.
     requestRender();
   }
   return stats;
@@ -4699,8 +4646,6 @@ window.addEventListener('scroll', updateCoordMarker, { passive: true });
 // "highlighted" look). Both fade out together after the mouse rests.
 canvas.addEventListener('pointermove', pokeCoordMarker);
 
-// Record button opens the unified modal (browser / jetson / both). The actual
-// launch branches live inside the modal's Start handler below.
 recordBtn.addEventListener('click', () => {
   if (isRecording || armingForRecord) return;
   openRecordModal();
@@ -4719,261 +4664,16 @@ progressCancel.addEventListener('click', () => {
     return;
   }
   if (activeRecording) activeRecording.cancelled = true;
-  if (activeJetsonJob) {
-    const { url, jobId } = activeJetsonJob;
-    activeJetsonJob = null;
-    // Fire-and-forget DELETE; the poll loop will see status transition to
-    // "cancelled" on its next tick and exit cleanly.
-    fetch(`${url}/jobs/${jobId}`, { method: 'DELETE' }).catch(() => {});
-  }
 });
-
-// --- Jetson Orin render service ---
-// Per-machine config lives in config.local.js (gitignored). See
-// config.example.js for the schema. Falls back to safe defaults if missing.
-const PRODUCTION_HOST = window.MANDELBROT_CONFIG?.productionHost || '';
-const LAN_JETSON_URL  = window.MANDELBROT_CONFIG?.lanJetsonUrl  || 'http://jetson.local:8080';
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-function resolveJetsonUrl() {
-  const host = window.location.hostname;
-  if (PRODUCTION_HOST && host === PRODUCTION_HOST) return window.location.origin + '/gpu';
-  if (LOCAL_HOSTS.has(host))   return LAN_JETSON_URL;
-  return localStorage.getItem('jetsonUrl') || 'http://jetson.local:8080';
-}
-const IS_PRODUCTION = !!PRODUCTION_HOST && window.location.hostname === PRODUCTION_HOST;
-
-async function checkJetsonAvailable() {
-  const url = resolveJetsonUrl();
-  try {
-    const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), 2500);
-    const res = await fetch(url.replace(/\/$/, '') + '/jobs', { signal: ctl.signal, cache: 'no-store' });
-    clearTimeout(to);
-    if (!res.ok) return { ok: false, version: null };
-    const data = await res.json().catch(() => ({}));
-    return { ok: true, version: data.version ?? null };
-  } catch {
-    return { ok: false, version: null };
-  }
-}
-
-// Cached availability so the record modal can synchronously reflect state
-// instead of racing a probe against the Start button. `null` = probe in flight
-// (or never run), so the modal can render a "checking…" placeholder instead of
-// falsely claiming the Jetson is offline. `jetsonVersion` reflects the deploy
-// timestamp exposed by the server — proof the latest code is live.
-let jetsonAvailable = null;
-let jetsonVersion = null;
-const jetsonLink = document.getElementById('jetson-link');
-async function refreshJetsonAvailability() {
-  const probe = await checkJetsonAvailable();
-  jetsonAvailable = probe.ok;
-  jetsonVersion = probe.version;
-  console.debug('[jetson-probe]', probe, '→ url:', resolveJetsonUrl());
-  // Show/hide the "jobs" link in the top bar so the dashboard is one click
-  // away when the Jetson is reachable, and invisible when it isn't.
-  if (jetsonLink) {
-    if (jetsonAvailable) {
-      jetsonLink.href = 'manage-jobs.html';
-      jetsonLink.style.display = '';
-    } else {
-      jetsonLink.style.display = 'none';
-    }
-  }
-  if (recordModal?.classList.contains('active')) syncJetsonModalState();
-}
-refreshJetsonAvailability();
-setInterval(refreshJetsonAvailability, 30_000);
-
-// Tracks the currently-running Jetson job so the progress cancel button can
-// propagate a cancel to the remote worker (local cancel alone would stop the
-// browser record but the Jetson would keep chewing through its range).
-let activeJetsonJob = null; // { url, jobId }
-
-// Submit a render job to the Jetson and poll until finished. Returns a stats
-// object (with `jobId` + `url` so the caller can merge/download later). Auto-
-// downloads unless `skipDownload` is set — split mode skips here and lets the
-// modal orchestrator upload the browser half and download the merged result.
-async function runJetsonJob({ startFrame = 0, endFrame = null, skipDownload = false } = {}) {
-  let url = resolveJetsonUrl();
-  const autoResolved = IS_PRODUCTION || LOCAL_HOSTS.has(window.location.hostname);
-  if (!autoResolved) {
-    const entered = prompt('Jetson render service URL:', url);
-    if (!entered) return 'cancelled';
-    url = entered;
-    localStorage.setItem('jetsonUrl', url);
-  }
-
-  const frames = readTotalFrames();
-  const fps = Math.max(15, Math.min(120, parseInt(fpsInput.value, 10) || 60));
-
-  const target = parseCoordTarget();
-  const cx = target ? target.cx : view.cx;
-  const cy = target ? target.cy : view.cy;
-  const body = {
-    center_re: decimalToString(cx),
-    center_im: decimalToString(cy),
-    frames, fps,
-    width: canvas.width,
-    height: canvas.height,
-    adaptive: false,
-    initial_follow_frames: frames,
-    palette: paletteEl.value,
-    start_frame: startFrame,
-    end_frame: endFrame ?? frames,
-    speed: readSpeed(),
-  };
-
-  // Keep progress visible while the submission is in flight; the overall
-  // frame count still ticks up in the browser-controlled state object.
-  setProgressVisible(true);
-
-  let jobId;
-  try {
-    const res = await fetch(url.replace(/\/$/, '') + '/render', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    jobId = data.job_id;
-    activeJetsonJob = { url: url.replace(/\/$/, ''), jobId };
-  } catch (e) {
-    setProgressVisible(false);
-    alert(`Failed to queue render on Jetson: ${e.message}\n\nCheck the URL and that the service is running:\n  python3 -m src.server`);
-    return { success: false, frames: 0, elapsedMs: 0, jobId: null };
-  }
-
-  let lastStatus = 'queued';
-  let lastJob = null;
-  while (true) {
-    await new Promise(r => setTimeout(r, 2000));
-    let s;
-    try {
-      const res = await fetch(`${url.replace(/\/$/, '')}/jobs/${jobId}`);
-      s = await res.json();
-    } catch (e) {
-      continue;  // transient poll failure; retry on next tick
-    }
-    lastStatus = s.status;
-    lastJob = s;
-    recordProgress.jetsonDone = s.frames_done || 0;
-    renderRecordProgress();
-    if (s.status === 'done' || s.status === 'failed' || s.status === 'cancelled') break;
-  }
-
-  if (lastStatus === 'done' && !skipDownload) {
-    try {
-      const res = await fetch(`${url.replace(/\/$/, '')}/download/${jobId}`);
-      const blob = await res.blob();
-      const dl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = dl;
-      a.download = `mandelbrot-jetson-${jobId}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(dl), 10_000);
-    } catch (e) {
-      alert(`Download failed: ${e.message}`);
-    }
-  } else if (lastStatus !== 'cancelled' && lastStatus !== 'done') {
-    console.error('Jetson job', lastStatus, lastJob);
-    const err = lastJob?.error ? `\n\n${lastJob.error}` : '';
-    alert(`Jetson job ${lastStatus}${err}\n\n(full payload in devtools console)`);
-  }
-
-  activeJetsonJob = null;
-  // Don't hide the progress bar here — modal orchestrator hides it once both
-  // backends are done.
-  // Derive wall-clock duration from the job's server timestamps so we don't
-  // include POST latency or polling overhead in the Jetson-side stat.
-  const jetsonFrames = lastJob?.frames_done ?? 0;
-  const jetsonStartTs = lastJob?.started_at;
-  const jetsonEndTs   = lastJob?.finished_at;
-  const jetsonElapsedMs = (jetsonStartTs && jetsonEndTs) ? (jetsonEndTs - jetsonStartTs) * 1000 : 0;
-  return {
-    success: lastStatus === 'done',
-    frames: jetsonFrames,
-    elapsedMs: jetsonElapsedMs,
-    jobId,
-    url: url.replace(/\/$/, ''),
-  };
-}
 
 // ---------- Unified record modal ----------
 
 const recordModal = document.getElementById('record-modal');
 const recModalStartBtn = document.getElementById('rec-modal-start');
 const recModalCancelBtn = document.getElementById('rec-modal-cancel');
-const recBrowserCb = document.getElementById('rec-browser');
-const recJetsonCb = document.getElementById('rec-jetson');
-const recJetsonLabel = document.getElementById('rec-jetson-label');
-const recJetsonHint = document.getElementById('rec-jetson-hint');
-
-// Paint the Jetson checkbox based on the cached availability. Called both when
-// the modal opens and whenever a background probe updates availability.
-function syncJetsonModalState() {
-  if (jetsonAvailable === null) {
-    recJetsonCb.disabled = true;
-    recJetsonLabel.classList.add('disabled');
-    recJetsonHint.textContent = 'checking…';
-  } else if (jetsonAvailable) {
-    recJetsonCb.disabled = false;
-    recJetsonLabel.classList.remove('disabled');
-    const ver = jetsonVersion ? ` · ${jetsonVersion}` : '';
-    recJetsonHint.textContent = `${resolveJetsonUrl()} · online${ver}`;
-  } else {
-    recJetsonCb.disabled = true;
-    recJetsonCb.checked = false;
-    recJetsonLabel.classList.add('disabled');
-    recJetsonHint.textContent = 'not reachable';
-  }
-}
-
-// Remember last jetson checkbox choice so repeat records don't force the user
-// to re-check it every time. Browser box stays on by default.
-const JETSON_CHOICE_KEY = 'recordJetsonChecked';
-// Rolling record of how long a single frame takes on each backend. Used to
-// proportion the frame-range split when the user picks both targets.
-const BROWSER_MS_PER_FRAME_KEY = 'browserMsPerFrame';
-
-// Split `totalFrames` so the browser and the Jetson finish at roughly the same
-// wall-clock time. Returns the browser's frame share — the Jetson picks up the
-// rest. Falls back to 50/50 when either backend has no prior timing data.
-async function computeSplitFrame(totalFrames) {
-  const browserMs = parseFloat(localStorage.getItem(BROWSER_MS_PER_FRAME_KEY));
-  let jetsonMs = NaN;
-  try {
-    const url = resolveJetsonUrl().replace(/\/$/, '') + '/jobs';
-    const res = await fetch(url, { cache: 'no-store' });
-    if (res.ok) {
-      const data = await res.json();
-      const s = data.worker?.stats;
-      if (s && s.frames_done > 0) {
-        jetsonMs = (s.gpu_ms_total + s.cpu_ms_total) / s.frames_done;
-      }
-    }
-  } catch {}
-
-  if (!isFinite(browserMs) || !isFinite(jetsonMs) || browserMs <= 0 || jetsonMs <= 0) {
-    return Math.floor(totalFrames / 2);
-  }
-  // If browser takes B ms/frame and jetson takes J ms/frame, splitting N frames
-  // so both finish at the same moment means browser_frames · B = jetson_frames · J,
-  // which solves to browser_frames = N · J / (B + J).
-  const browserShare = totalFrames * jetsonMs / (browserMs + jetsonMs);
-  return Math.max(0, Math.min(totalFrames, Math.round(browserShare)));
-}
 function openRecordModal() {
   if (armingForRecord) cancelArm();
   recordModal.classList.add('active');
-  recJetsonCb.checked = localStorage.getItem(JETSON_CHOICE_KEY) === '1';
-  syncJetsonModalState();
-  // Kick off a fresh probe in the background — if it flips state mid-modal,
-  // syncJetsonModalState re-runs from refreshJetsonAvailability.
-  refreshJetsonAvailability();
 }
 
 function closeRecordModal() {
@@ -4990,134 +4690,45 @@ recordModal.addEventListener('click', (e) => {
 });
 
 // Run the browser-side recording and return a promise that resolves to a stats
-// object ({ success, frames, elapsedMs }). `framesOverride` caps the recording
-// length (used in split mode — browser does [0, split), Jetson does the rest).
-// Handles both coord-target and click-arm paths.
-function recordInBrowser(framesOverride, backend = 'auto') {
+// object ({ success, frames, elapsedMs }). Handles both coord-target and
+// click-arm paths.
+function recordInBrowser(backend = 'auto') {
   const target = parseCoordTarget();
   if (target) {
-    return startRecordingWithTarget(target.cx, target.cy, framesOverride, backend);
+    return startRecordingWithTarget(target.cx, target.cy, backend);
   }
   return new Promise((resolve, reject) => {
     armRecord();
-    pendingClickRecord = { resolve, reject, framesOverride, backend };
+    pendingClickRecord = { resolve, reject, backend };
   });
 }
 
 recModalStartBtn.addEventListener('click', async () => {
-  const wantBrowser = recBrowserCb.checked;
-  const wantJetson = recJetsonCb.checked && !recJetsonCb.disabled;
-  // Radio for renderer: 'auto' | 'gpu' | 'cpu'. Only applies to the browser
-  // recording path; the Jetson has its own renderer and ignores this.
+  // Radio for renderer: 'auto' | 'gpu' | 'cpu'.
   const selectedRendererEl = document.querySelector('input[name="rec-renderer"]:checked');
   const browserBackend = selectedRendererEl ? selectedRendererEl.value : 'auto';
-  if (!wantBrowser && !wantJetson) {
-    alert('Pick at least one target (browser or jetson).');
-    return;
-  }
-  localStorage.setItem(JETSON_CHOICE_KEY, wantJetson ? '1' : '0');
   closeRecordModal();
 
   const totalFrames = readTotalFrames();
-
-  // SPLIT MODE (both checked): browser is the lead and takes frames [0, split)
-  // locally; Jetson picks up [split, total) remotely. Split point is derived
-  // from measured per-frame speed of each backend so the slower one gets a
-  // proportionally smaller share and both finish around the same time. Both
-  // simulate the same camera path from HOME (worker.py advances view state
-  // even for skipped frames), so the two outputs line up back-to-back.
-  //
-  // SINGLE-TARGET (only one checked): that target renders the whole clip.
-  const splitFrame = (wantBrowser && wantJetson) ? await computeSplitFrame(totalFrames) : 0;
-  const browserFrames = wantBrowser && wantJetson ? splitFrame : totalFrames;
-  const jetsonStart  = wantBrowser && wantJetson ? splitFrame : 0;
-  const jetsonEnd    = totalFrames;
-  if (wantBrowser && wantJetson) {
-    console.log(`record split: browser [0,${splitFrame}) · jetson [${splitFrame},${totalFrames})`);
-  }
-
-  // Skip a target when the split hands it a degenerate range — e.g. a very
-  // slow browser against a fast Jetson can round browser's share down to
-  // zero, in which case the Jetson just does the whole clip.
-  const doBrowser = wantBrowser && browserFrames >= 2;
-  const doJetson  = wantJetson  && jetsonEnd > jetsonStart;
-
-  resetRecordProgress({
-    total: totalFrames,
-    browserTarget: doBrowser ? browserFrames : 0,
-    jetsonTarget: doJetson ? (jetsonEnd - jetsonStart) : 0,
-  });
+  resetRecordProgress({ total: totalFrames });
   setProgressVisible(true);
-
-  // Split mode: both backends render part of the clip. Tell the browser record
-  // to hold its blob (instead of auto-downloading) so we can upload it to the
-  // Jetson for concatenation — single merged mp4 out, not two fragments.
-  const splitMode = doBrowser && doJetson;
-  holdBrowserBlob = splitMode;
-  pendingBrowserBlob = null;
 
   const overallT0 = performance.now();
   let browserStats = null;
-  let jetsonStats = null;
   try {
-    const jetsonPromise = doJetson
-      ? runJetsonJob({ startFrame: jetsonStart, endFrame: jetsonEnd, skipDownload: splitMode })
-      : null;
-    if (doBrowser) browserStats = await recordInBrowser(browserFrames, browserBackend);
-    if (jetsonPromise) jetsonStats = await jetsonPromise;
+    browserStats = await recordInBrowser(browserBackend);
   } catch (e) {
     if (e?.message !== 'cancelled') console.error('record flow:', e);
   }
   const overallElapsedMs = performance.now() - overallT0;
-  // Clamp the per-backend counters to their targets so the bar hits 100% even
-  // when the final poll/update was missed. Then stop the clock.
-  if (browserStats?.success) recordProgress.browserDone = recordProgress.browserTarget;
-  if (jetsonStats?.success)  recordProgress.jetsonDone  = recordProgress.jetsonTarget;
+  if (browserStats?.success) recordProgress.done = recordProgress.total;
   stopRecordProgress();
 
-  // Post-processing: merge the two parts into a single mp4 if both succeeded.
-  if (splitMode && browserStats?.success && jetsonStats?.success && pendingBrowserBlob) {
-    // Bar stays at 100%; the text marks the phase transitions from rendering
-    // to merging to downloading so the user sees activity after "100%".
-    progressFill.style.width = '100%';
-    progressText.textContent = 'uploading browser part…';
-    try {
-      const mergeRes = await fetch(`${jetsonStats.url}/merge/${jetsonStats.jobId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'video/mp4' },
-        body: pendingBrowserBlob,
-      });
-      if (!mergeRes.ok) throw new Error(`HTTP ${mergeRes.status}: ${await mergeRes.text()}`);
-      progressText.textContent = 'downloading merged mp4…';
-      const dlRes = await fetch(`${jetsonStats.url}/download/${jetsonStats.jobId}`);
-      const blob = await dlRes.blob();
-      triggerBlobDownload(blob, `mandelbrot-${Date.now()}.mp4`);
-    } catch (e) {
-      console.error('merge failed', e);
-      alert(`Merge failed: ${e.message}\n\nDownloading both parts separately.`);
-      triggerBlobDownload(pendingBrowserBlob, `mandelbrot-part1-${Date.now()}.mp4`);
-      try {
-        const dlRes = await fetch(`${jetsonStats.url}/download/${jetsonStats.jobId}`);
-        triggerBlobDownload(await dlRes.blob(), `mandelbrot-part2-${Date.now()}.mp4`);
-      } catch {}
-    }
-  }
-  pendingBrowserBlob = null;
-  holdBrowserBlob = false;
-
   setProgressVisible(false);
-  if (browserStats?.success || jetsonStats?.success) {
-    showStatsModal(browserStats, jetsonStats, overallElapsedMs);
+  if (browserStats?.success) {
+    showStatsModal(browserStats, overallElapsedMs);
   }
 });
-
-function triggerBlobDownload(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
 
 // ---------- Post-record stats modal ----------
 
@@ -5135,20 +4746,12 @@ function addStatsRow(label, value, cls = '') {
   statsBody.appendChild(l);
   statsBody.appendChild(v);
 }
-function addStatsSep() {
-  const sep = document.createElement('div');
-  sep.className = 'sep';
-  statsBody.appendChild(sep);
-}
-
-function showStatsModal(browser, jetson, overallMs) {
-  const browserFrames = browser?.frames ?? 0;
-  const jetsonFrames = jetson?.frames ?? 0;
-  const doneFrames = browserFrames + jetsonFrames;
+function showStatsModal(browser, overallMs) {
+  const doneFrames = browser?.frames ?? 0;
   // `recordProgress.total` is what the user asked for. Diverges from actual
-  // done when a backend fails or the user cancels mid-render — flag it so
-  // the stats read honestly instead of silently pretending "81 frames" was
-  // the goal when it was actually "100 frames requested, 81 delivered".
+  // done when the user cancels mid-render — flag it so the stats read
+  // honestly instead of silently pretending "81 frames" was the goal when
+  // it was actually "100 frames requested, 81 delivered".
   const requested = recordProgress.total || doneFrames;
   const incomplete = doneFrames < requested;
 
@@ -5163,16 +4766,6 @@ function showStatsModal(browser, jetson, overallMs) {
   addStatsRow('throughput', `${fmtFps(doneFrames, overallMs)} (wall-clock)`, 'highlight');
   if (incomplete) {
     addStatsRow('note', `${requested - doneFrames} frames missing (cancelled or failed)`, 'highlight');
-  }
-
-  if (browserFrames > 0 || jetsonFrames > 0) addStatsSep();
-  if (browserFrames > 0) {
-    addStatsRow('browser',
-      `${browserFrames} frames · ${fmtFps(browserFrames, browser.elapsedMs)} · ${fmtElapsed(browser.elapsedMs)}`);
-  }
-  if (jetsonFrames > 0) {
-    addStatsRow('jetson',
-      `${jetsonFrames} frames · ${fmtFps(jetsonFrames, jetson.elapsedMs)} · ${fmtElapsed(jetson.elapsedMs)}`);
   }
   statsModal.classList.add('active');
 }

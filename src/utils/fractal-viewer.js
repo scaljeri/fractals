@@ -1,11 +1,15 @@
-/* fractal.html — generic viewer logic.
-   Reads ?type=xxx, finds the entry in FRACTALS, picks the right renderer
-   module, and wires up the chrome (palette swatches, hotkeys). */
+/* Generic viewer logic shared by src/<fractal>/index.html for the 9
+   non-deep-zoom fractals. Picks the fractal id from (in order):
+   (1) ?type= URL param, (2) <body data-fractal-id="...">, (3) 'julia' default.
+   Picks the right renderer module and wires up the chrome
+   (palette swatches, hotkeys). */
 
 (async function () {
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
-  const type = params.get('type') || 'julia';
+  const type = params.get('type')
+    || document.body.dataset.fractalId
+    || 'julia';
 
   // Exclude mandelbrot + game_of_life from the generic viewer; they have
   // dedicated pages with very different chrome.
@@ -14,7 +18,7 @@
   const f = ROUTED[idx >= 0 ? idx : 0];
 
   if (!f) {
-    location.href = 'index.html';
+    location.href = '../../index.html';
     return;
   }
 
@@ -305,7 +309,7 @@
       return;
     }
     if (e.key === 'm' || e.key === 'M') setMenu(!menuOpen);
-    else if (e.key === 'Escape') location.href = 'index.html';
+    else if (e.key === 'Escape') location.href = '../../index.html';
     else if (e.key === 'p' || e.key === 'P') applyPalette(palIdx + 1);
     else if (e.key === 'ArrowLeft')  goNeighbor(-1);
     else if (e.key === 'ArrowRight') goNeighbor(+1);
@@ -328,7 +332,10 @@
     const here = all.findIndex(x => x.id === f.id);
     const next = (here + delta + all.length) % all.length;
     const n = all[next];
-    location.href = n.href || `fractal.html?type=${n.id}`;
+    // From a per-fractal page (src/<current>/), siblings live at ../<id>/.
+    // Underscored ids (burning_ship, game_of_life) map to dashed folders.
+    const slug = n.id.replace(/_/g, '-');
+    location.href = `../${slug}/`;
   }
 
   /* ---------- toast ---------- */

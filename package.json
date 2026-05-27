@@ -4,6 +4,9 @@
   "description": "",
   "main": "main.js",
   "scripts": {
+    "start": "python3 -m http.server 8765",
+    "deploy": "bash scripts/deploy.sh",
+    "deploy:dry": "bash scripts/deploy.sh --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

@@ -1,160 +1,248 @@
-# AGENTS.md
+# CLAUDE.md
 
 Onboarding for AI coders (and humans) working in this repo.
 
 ## What this project is
 
-A browser-based Mandelbrot fractal explorer with infinite zoom, built on
-**WebGPU** using **perturbation theory + DD (double-float) arithmetic**.
-Optionally records zoom videos client-side via WebCodecs, or offloads heavy
-renders to an external **Jetson Orin AGX** running a CUDA + NVENC backend.
+A browser-only **Fractal Atlas**: twelve fractals (Mandelbrot, Julia, Burning
+Ship, Mandelbulb, Sierpiński, Menger, Koch, Dragon, Cantor, Barnsley, Lorenz,
+Game of Life) with an info dialog per fractal.
 
-Stack summary:
-- Frontend: a single-page WebGPU app, no build step (ES modules + CDN imports).
-- Backend (optional): FastAPI + CUDA kernel on a Jetson, reachable via `/gpu/*`.
-- Ship target: any static host serving the frontend; Jetson stays separate.
+The infrastructural centrepiece is the **WebGPU Mandelbrot/Julia engine** with
+perturbation theory + mixed-precision math (TD-f32 / DD-f64 / QD-f64). It
+pushes the browser zoom ceiling past 10²⁸ while staying interactive. The other
+ten fractals are built around it via shared CPU + GPU renderer pairs.
+
+**No backend. No build step.** Static HTML/CSS/JS — open the page and explore.
 
 ## Folder layout
 
 ```
-mandelbrot/
-├── frontend/            # browser app (WebGPU, WGSL, decimal.js)
-│   ├── index.html       # HUD + controls
-│   ├── main.js          # shader, perturbation, record pipeline (~49 KB)
-│   └── test-perturbation.mjs   # Node validation of the math
-├── jetson/              # CUDA + FastAPI render service (native deploy on Jetson)
-│   ├── src/             # server.py, worker.py, kernel.cu, reference.py
-│   ├── scripts/         # build.sh, deploy.sh, test-render.sh
-│   └── README.md
-├── Dockerfile           # Caddy image: frontend + /gpu proxy (dev convenience)
-├── Caddyfile            # Caddy config used by the image and docker compose
-├── Caddyfile.example    # Standalone template for Caddy-on-VM setups
-├── docker-compose.yml   # Local dev orchestration
-├── DEPLOY.md            # Deployment guide (Caddy-on-VM)
-└── MEMORY.md            # Architecture decisions + current feature state
+.
+├── index.html                  # Atlas home (12-tile grid)
+├── favicon.ico
+├── assets/
+│   ├── css/                    # Design tokens + site styles
+│   └── renders/                # Home-grid PNG previews
+├── src/
+│   ├── mandelbrot/             # Mandelbrot page (WebGPU deep-zoom)
+│   │   ├── index.html
+│   │   └── legacy.html         # Pre-Atlas single-page version (kept for diffing)
+│   ├── julia/                  # Julia page — thin shim, loads the engine with kind=julia
+│   │   └── index.html
+│   ├── burning-ship/           # Each generic-viewer fractal: one folder, one HTML
+│   ├── mandelbulb/             # body[data-fractal-id] picks the renderer.
+│   ├── sierpinski/
+│   ├── menger/
+│   ├── koch/
+│   ├── cantor/
+│   ├── barnsley/
+│   ├── dragon/
+│   ├── lorenz/
+│   ├── game-of-life/
+│   │   ├── index.html
+│   │   ├── game-of-life.js
+│   │   └── game-of-life-patterns.js
+│   └── utils/
+│       ├── fractals.js               # 12-fractal catalogue
+│       ├── fractal-info.js           # Info-modal content (history, formula, refs)
+│       ├── fractal-viewer.js         # Generic-page dive controller
+│       ├── viewer.css                # Shared styles for src/<fractal>/index.html
+│       ├── canvas.js, palette.js, webgpu-{device,palette}.js, escape-time-worker.js
+│       ├── deep-zoom-engine/         # Mandelbrot/Julia engine (~6k lines)
+│       │   ├── main.js
+│       │   ├── orbit-worker.js
+│       │   ├── cpu-render-worker.js  # CPU tile renderer (TD/DD/QD precision tiers)
+│       │   ├── cpu-render-core.js    # Shared CPU iteration core
+│       │   ├── qd-f64.js             # Quad-double float library (Bailey-Hida)
+│       │   └── seed-select.js
+│       └── renderers/
+│           ├── escape-time.js, ifs.js, lsystem.js, subdivision.js, ode.js   # CPU
+│           └── gpu/*.js              # WebGPU pairs
+├── tests/
+│   ├── test-cpu-render.mjs           # Node test runner for CPU + DD/QD math
+│   ├── test-perturbation.mjs         # Node validation of the perturbation math
+│   └── render-sample.mjs             # CLI sample render to PPM
+├── scripts/                          # rsync deploy (gitignored — personal infra)
+├── design/                           # Design references (out of build)
+└── .claude/
+    ├── CLAUDE.md, PLAN.md            # this file + roadmap
+    └── settings.json                 # portable Claude Code allowlist
 ```
 
-## Architecture
-
-```
- ┌────────┐          ┌────────────────────┐          ┌──────────────────┐
- │browser │──https──▶│ reverse proxy        │──────▶│ frontend (static)│
- │        │          │  <your-domain>       │          │ WebGPU app       │
- │        │          │                      │          └──────────────────┘
- │        │          │  /gpu/* ─────┐       │
- └────────┘          └──────────────┼──────┘
-                                    │
-                                    ▼
-                         ┌──────────────────────┐
-                         │  Jetson Orin AGX     │
-                         │  FastAPI + CUDA      │
-                         │  (LAN / tunnel)      │
-                         └──────────────────────┘
-```
-
-- `<your-domain>/` → static `frontend/` (Caddy, nginx, S3, GH Pages, …)
-- `<your-domain>/gpu/*` → reverse-proxied to the Jetson (LAN / Tailscale / tunnel)
-
-Per-machine specifics (production hostname, Jetson LAN URL, deploy target)
-live in **gitignored** files: `frontend/config.local.js`, `frontend/.env`, and
-`jetson/.env`. Tracked `*.example` files document the schemas.
+**Fractal-page URL pattern.** Each fractal has its own folder at
+`/src/<id>/`; the `index.html` inside sets `<body data-fractal-id="...">`
+which `fractal-viewer.js` reads as a fallback to the legacy `?type=` query
+param. Mandelbrot and Julia load the deep-zoom engine module directly; the
+other 9 share the same viewer.css + viewer.js template.
 
 ## How to run locally
 
 ```bash
-docker compose up -d
-# → http://localhost:8080
+python3 -m http.server 8765
+# → http://localhost:8765
 ```
 
-That brings up one Caddy container that:
-- Serves `frontend/` as static files (bind-mounted, so edits are live)
-- Proxies `/gpu/*` to `$JETSON_URL` (default `http://host.docker.internal:8080`)
+No `npm install`, no bundler, no watcher. WebGPU requires a recent browser
+(Chrome 113+, Edge 113+, Safari 18+). Over `file://`, WebGPU is blocked — so
+serve over HTTP even for local development.
 
-Point the proxy somewhere real by exporting `JETSON_URL` before
-`docker compose up -d`, e.g. `export JETSON_URL=http://10.0.0.42:8080`. If no
-backend is reachable, the frontend health check hides the GPU-record button
-automatically.
+## How to deploy
 
-Stop with `docker compose down`.
+The site is static — copy the repo contents (minus the excludes baked into
+`scripts/deploy.sh`) to any static host: Cloudflare Pages, Netlify, GitHub
+Pages, S3 + CloudFront, Vercel, nginx, …
 
-## How to deploy the frontend
-
-The static frontend can be hosted anywhere (Caddy file_server, nginx, S3,
-GitHub Pages, …). See [DEPLOY.md](DEPLOY.md) for the rsync-over-SSH flow:
+For rsync-over-SSH:
 
 ```bash
-cp frontend/config.example.js frontend/config.local.js   # productionHost + lanJetsonUrl
-cp frontend/.env.example frontend/.env                   # DEPLOY_USER/HOST/DIR
-bash frontend/scripts/deploy.sh
+cp .env.example .env       # fill in DEPLOY_USER / DEPLOY_HOST / DEPLOY_DIR
+bash scripts/deploy.sh     # add --dry-run for a preview
 ```
 
-## How to deploy the Jetson backend
-
-The Jetson runs natively (systemd) — see [jetson/README.md](jetson/README.md).
-Short version:
-
-```bash
-cp jetson/.env.example jetson/.env
-# edit JETSON_USER/HOST/DIR/PORT
-bash jetson/scripts/build.sh
-bash jetson/scripts/deploy.sh
-```
+**HTTPS is required for WebGPU in production browsers.**
 
 ## Conventions
 
-- **No frontend build step.** Don't add bundlers, TypeScript compilers, or npm
-  scripts. ES modules + CDN imports (e.g. decimal.js from jsdelivr).
-- **WGSL lives inline** in [frontend/main.js](frontend/main.js). The browser
-  shader uses DD-f32 (two f32 per value, ~14 digits); the Jetson CUDA kernel
-  uses the same representation (FF-f32).
-- **Coords travel as strings** from UI → backend, so arbitrary precision is
-  preserved end-to-end. Conversion to FF-f32 happens at the last possible step.
-- **No mocks for the Jetson.** Either a real backend is reachable or the UI
-  hides its button. Don't invent a stub render service.
-- **No `--use_fast_math` on the CUDA kernel.** It breaks Dekker arithmetic.
-  The kernel uses explicit `__fmul_rn` / `__fmaf_rn` intrinsics in the hot
-  loop to force IEEE rounding.
-- **After every Jetson code deploy, finish with**
-  `ssh luca@monster "sudo systemctl restart mandelbrot"` — stale code
-  otherwise.
-- **Plans and decisions** go in [MEMORY.md](MEMORY.md), not scattered comments.
+- **No build step (yet).** Don't add bundlers, TypeScript compilers, or npm
+  scripts. ES modules + CDN imports (e.g. `decimal.js` from jsdelivr). Build
+  tooling + dev server is a planned next iteration — see [PLAN.md](PLAN.md).
+- **WGSL lives inline** in [src/utils/deep-zoom-engine/main.js](../src/utils/deep-zoom-engine/main.js).
+  The browser shader uses DD-f32 (two f32 per value, ~14 digits); deeper zoom
+  drops to CPU with DD-f64 / QD-f64 math via `cpu-render-core.js` + `qd-f64.js`.
+- **Coords travel as strings** via `decimal.js`, so arbitrary precision is
+  preserved end-to-end inside the browser.
+- **Plans and decisions** go in [PLAN.md](PLAN.md), not scattered comments.
+- **Debug helpers stay in sync** — every new flag/cache/gen counter gets a
+  `console.log` at the decision point AND an entry in `window.mb()`
+  (`window.dumpMandelbrotState`).
 
 ## Key files to know
 
 | What | Where |
 |---|---|
-| WebGPU shader + DD-f32 math | [frontend/main.js](frontend/main.js) (shader string, top of file) |
-| Perturbation rebasing (Zhuoran) | [frontend/main.js](frontend/main.js) — `rebase` logic inside the shader |
-| Browser reference orbit (decimal.js, 60 digits) | [frontend/main.js](frontend/main.js) |
-| Record pipeline (2-frame, overlay) | [frontend/main.js](frontend/main.js) — `recordVideo()` |
-| Hostname → Jetson URL resolution | [frontend/main.js:1245](frontend/main.js#L1245) |
-| Manage-jobs dashboard | [frontend/manage-jobs.html](frontend/manage-jobs.html) |
-| CUDA kernel (FF + BLA) | [jetson/src/kernel.cu](jetson/src/kernel.cu) |
-| FastAPI render service | [jetson/src/server.py](jetson/src/server.py) |
-| CUDA worker (context, pipelining, stats) | [jetson/src/worker.py](jetson/src/worker.py) |
-| Reference orbit + BLA table generation | [jetson/src/reference.py](jetson/src/reference.py) |
-| Systemd unit template | [jetson/systemd/mandelbrot.service](jetson/systemd/mandelbrot.service) |
-| Deploy scripts | [jetson/scripts/build.sh](jetson/scripts/build.sh), [jetson/scripts/deploy.sh](jetson/scripts/deploy.sh) |
-| Live integration tests | [jetson/tests/](jetson/tests/) |
-| Browser-fake debug script | [jetson/scripts/fake-browser.py](jetson/scripts/fake-browser.py) |
-| Scientific validation of perturbation | [frontend/test-perturbation.mjs](frontend/test-perturbation.mjs) |
+| WebGPU shader + DD-f32 math | [src/utils/deep-zoom-engine/main.js](../src/utils/deep-zoom-engine/main.js) (shader string, top of file) |
+| Perturbation rebasing (Zhuoran) | [src/utils/deep-zoom-engine/main.js](../src/utils/deep-zoom-engine/main.js) — `rebase` logic inside the shader |
+| Browser reference orbit (decimal.js, 60 digits) | [src/utils/deep-zoom-engine/main.js](../src/utils/deep-zoom-engine/main.js) |
+| Record pipeline (WebCodecs, browser-only) | [src/utils/deep-zoom-engine/main.js](../src/utils/deep-zoom-engine/main.js) — `recordVideo()` |
+| Generic fractal viewer (CPU + GPU fallback) | [src/utils/fractal-viewer.js](../src/utils/fractal-viewer.js) |
+| Per-fractal CPU/GPU renderers | [src/utils/renderers/](../src/utils/renderers/) |
+| Info-modal content (history, formula, refs) | [src/utils/fractal-info.js](../src/utils/fractal-info.js) |
+| 12-fractal catalogue + palettes | [src/utils/fractals.js](../src/utils/fractals.js) |
+| Scientific validation of perturbation | [tests/test-perturbation.mjs](../tests/test-perturbation.mjs) |
+| CPU/DD/QD math tests | [tests/test-cpu-render.mjs](../tests/test-cpu-render.mjs) |
+
+## Architecture decisions
+
+The non-obvious choices behind the Mandelbrot/Julia engine. Read these before
+proposing changes — most have been tried-and-rejected alternatives.
+
+### Perturbation + Zhuoran rebasing
+The shader and the CPU kernel both iterate `W ← 2·Z·W + W² + δ` against a
+high-precision reference orbit, with **Zhuoran rebasing** when
+`max(|Z.re|,|Z.im|) < 2·max(|W.re|,|W.im|)` (plus a forced rebase when the
+reference is exhausted). Rejected: Pauldelbrot rebasing (too eager, hurt
+deep-seahorse convergence) and Series Approximation (coefficients exploded to
+~10²⁷⁰, f64 cancellation gave garbage pixels). A leftover `cddMul` helper in
+the shader is from the SA prototype and can be removed.
+
+### Browser CPU precision ladder: DD-f64 → QD-f64
+The CPU renderer starts at DD-f64 (~31 digits, reaches ~10³¹) and
+auto-engages QD-f64 (~62 digits, reaches ~10⁶²) past zoom 10³¹. QD is
+Bailey-Hida "sloppy" variants of add/sub/mul/sqr/div ported from libqd, in
+[qd-f64.js](qd-f64.js), validated to 1e-58 — 1e-60 relative error against
+Decimal.js in [test-cpu-render.mjs](test-cpu-render.mjs). Decimal.js
+per-pixel was rejected (~300× slower than QD-f64 because every multiply
+allocates objects). WGSL multi-component f32 was rejected too — WebGPU has
+no f64, and 6D/8D-f32 hand-tuned WGSL would be ~600 lines with no good way
+to unit-test.
+
+### `decimal.js` precision floor of 60
+`ensureReference` calls `Decimal.set({ precision: zoomDigits + 15 })`. If
+allowed to drop below 60, later `view.cx.plus(offset)` calls at deep zoom
+silently round the offset to zero — the user clicks at zoom 10²⁷ and the
+view doesn't move because the click offset (4.4×10⁻²⁷) lands beyond the
+precision floor. Keep the floor at 60 so any later setting can only
+**increase** precision, never decrease it.
+
+### Single-level BLA (skip=16)
+After the reference orbit, we precompute a BLA (Bivariate Linear
+Approximation) table: per index n, the 16-step linearised map
+`w ← A_n·w + B_n·δ`, valid while `|w| < r_n`. Accumulated in f64, stored as
+f32 per entry (5 floats × orbit_len). Helps from zoom ~10³ upward (pixels
+spend many iterations near-linearised); marginal at shallow zoom where
+pixels escape inside the 16-step window. Hierarchical BLA (adaptive skip
+across levels 2⁰..2^L) would unlock 10–100× at zoom >10⁸ per the
+literature, but that's a larger project.
+
+### HQ button: deep-search + adaptive iter + texture seed
+`startHighQualityRender` swaps in: (1) a 7×7 grid at 3 concentric radii =
+up to 147 candidate reference orbits (vs 3×3 = 8 interactively) with
+`ORBIT_MAX_ITER_CAP_HQ = 50000`; (2) an adaptive iter cap
+`phaseIters = clamp(5 × orbit_len, 1500, 5000)` so cheap views don't waste
+budget rebasing into accumulated error; (3) a **texture seed** — the
+existing `cpuBlitTexture` is preserved and upscaled into the new HQ-sized
+buffer so the canvas never blanks during the render; (4) `timeoutMs:
+Infinity` (deep-zoom tiles legitimately take minutes; cancellation goes
+through `progressiveGen`). Visible in CPU mode only — GPU's auto-progressive
+`[4, 1]` chain already runs full-quality d=1.
+
+### `progressiveActive` + `dragLowRes` flags gate `cpuRender`
+`progressiveRender`'s CPU phase block uses `cpuRenderPixels` directly,
+bypassing `cpuRender()`. Without `progressiveActive` (true between
+`progressiveRender` start and its `slowPathCleanup`), the orbit-worker's
+response handler triggers a parallel full-res CPU render that hogs all
+workers and blocks the d=4 preview for 20+ seconds. `dragLowRes` is the
+same pattern for pointer-drag — live CPU re-renders during pan are useless
+and pile up unfinishable work.
+
+### Render-width override + auto-scaling
+HUD `render w` dropdown (`auto`/`100`/`200`/`400`/`800`/`1920`), persisted
+in `localStorage`. `auto` scales with zoom — full canvas <10²⁰, 1/2 at
+10²⁰⁻³⁰, 1/4 at 10³⁰⁻⁵⁰, 1/8 past 10⁵⁰. Manual values override regardless
+of zoom. HQ ignores auto's downscale (HQ in auto = full canvas) but honours
+manual values exactly. `effectiveRenderWidth()` returns the target width in
+device pixels; the CPU phase block divides further by the phase divisor.
+
+### Canvas drawing buffer always at full DPR
+Per-pixel rendering lands in a smaller `cpuBlitTexture`; a tiny `blitUpscale`
+WGSL shader samples it with linear filtering and writes to the swapchain at
+canvas size. This means d=8 → d=4 → d=2 transitions just reallocate
+`cpuBlitTexture` — the swapchain stays alive and the visible image never
+blanks. `cpuBlitTexture` needs `RENDER_ATTACHMENT | COPY_DST | COPY_SRC |
+TEXTURE_BINDING` usage flags; missing `TEXTURE_BINDING` silently fails
+bind-group creation and the canvas stays black even though tiles complete.
+
+### Click-zoom preview is a crosshair, not a literal preview
+`CLICK_ZOOM = 0.5` (one click halves the viewport) is decoupled from
+`PREVIEW_SCALE = 1/6` (hover indicator size). Zoom depth per click is tuned
+independently of the visual indicator — the preview is a precise crosshair,
+not a scaled preview of the destination viewport.
+
+### `AUTO_CORRECT` adaptive steering is off
+Adaptive contrast-following during recording drove the camera into dead
+cells. Both code paths are gated: `recordVideo` sets `const AUTO_CORRECT =
+false` so segment-interpolation never runs and the camera follows the click
+target frame-by-frame. Boundary-preferring cell scoring and
+zoom-out-on-flat stay on — just not the full adaptive override of the
+user's chosen target.
+
+### `window.mb()` debug snapshot
+Every flag, cache, gen counter, and decision point in the rendering
+pipeline is surfaced via `console.log` with a `[component] ...` prefix and
+via `window.dumpMandelbrotState()` (alias `window.mb()`). Invoke `window.mb()`
+from devtools to get a one-shot snapshot of the entire render state when
+triaging "screen black / stuck / off" reports. **Any new piece of pipeline
+state must update both the console traces and the `mb()` snapshot** — this
+rule is load-bearing for triage.
 
 ## Troubleshooting pointers
 
-- Rendering goes wrong at extreme zoom → precision ceiling of FF is ~10¹³.
-  Beyond that needs triple/quad-float in the kernel or MPFR on the CPU side.
-- Jetson button doesn't appear → the frontend's 30s health-check against
-  `/jobs` is failing. Confirm `/gpu/jobs` (prod) or `http://monster:8080/jobs`
-  (local dev) returns 200.
-- `cuModuleLoadDataEx failed: invalid device context` → someone imported
-  `pycuda.autoinit` again. Don't — the worker makes its own context per
-  render.
-- `Unknown encoder 'h264_nvenc'` → apt's ffmpeg lacks NVENC. Worker auto-
-  falls-back to libx264. To get real NVENC install `jetson-ffmpeg`.
-- `No such file or directory: 'nvcc'` → systemd PATH missing
-  `/usr/local/cuda/bin`. Fixed in the unit; if re-installing, re-copy the
-  unit and `daemon-reload`.
+- Rendering goes wrong at extreme zoom → precision ceiling. Browser shader
+  is FF/DD-f32 (~10¹³); CPU DD-f64 takes over from there, QD-f64 past 10³¹.
+- "Black canvas" / "render is stuck" → call `window.mb()` in devtools for a
+  full state dump (view, orbit cache, flags, progressive state).
+- BLA shows no benefit → expected at shallow zoom (~10⁰–10²); BLA starts
+  paying off at zoom 10³+.
 - Video record produces uniform/black frames → auto-zoom boundary scoring
   picked a flat cell; lower `FLAT_THRESHOLD` or disable auto-zoom.
-- BLA shows no benefit → expected at shallow zoom (~10⁰-10²). BLA starts
-  paying off at zoom 10³+.

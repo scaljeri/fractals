@@ -2,10 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(node test-cpu-render.mjs)",
-      "Bash(cat)",
-      "Bash(node /tmp/tr-bruteforce.mjs)",
-      "Bash(cp /tmp/tr-bruteforce.mjs /Users/luca/dev/mandelbrot/frontend/tr-bruteforce.mjs)",
-      "Bash(node tr-bruteforce.mjs)"
+      "Bash(node test-perturbation.mjs)",
+      "Bash(node tr-bruteforce.mjs)",
+      "Bash(python3 -m http.server 8765)",
+      "Bash(cat)"
     ]
   }
 }

@@ -1,26 +1,27 @@
 # Mandelbrot deep-zoom refactor plan
 
 Living document for the multi-iteration refactor that lifts the browser-side
-zoom ceiling from ~10^31 to 10^100+ and enables long-running deep-zoom video
-production via the Jetson CUDA backend. Updated as iterations land.
+zoom ceiling from ~10^31 to 10^100+. Updated as iterations land.
 
 > **2026-05-26 scope note** — the site grew sideways in May 2026 into a
 > **12-fractal Atlas** (see `Atlas iteration` section near the bottom).
 > This precision/depth roadmap continues to apply *only* to the
 > Mandelbrot/Julia tab; the other ten fractals + Game of Life are
-> orthogonal. The Jetson backend has been **hidden from the UI** as part of
-> a shift to static-only deployment — `Iteration 4 (Jetson CUDA)` is on hold
-> until the user decides to put the backend back.
+> orthogonal.
+>
+> **2026-05-27 scope note** — the project is now static-only. The Jetson
+> CUDA backend and all related plumbing (Dockerfile, Caddyfile, Helm refs,
+> `/gpu` reverse proxy) have been removed. Deep-zoom video at production
+> quality is on hold until / unless a backend is reintroduced.
 
 ## Goal
 
-Deep-zoom **video production**, with the browser as a fluent exploration UI.
-Specifically:
+Browser-side deep-zoom **exploration**, plus client-side video recording via
+WebCodecs. Specifically:
 
 - Browser stays usable to ~10⁶² (interactive preview, low-res renders).
-- Jetson handles production-quality video frames at any depth.
-- HQ button bridges the two: explore in browser, hit HQ when found a spot,
-  push to Jetson queue when ready to publish.
+- HQ button forces a full-resolution render at the current view.
+- Recording uses WebCodecs/H.264 entirely in the browser.
 
 ## Iterations
 
@@ -36,17 +37,17 @@ precision lift, so they can keep clicks responsive at deep zoom.
 - Wired into both progressive CPU phases and HQ
 - HQ ignores auto's downscale (auto mode = full canvas), honors manual values
 
-Files: `frontend/index.html`, `frontend/main.js`
+Files: `index.html`, `main.js`
 
 ### ✓ Iteration 2 (foundation) — QD-f64 math library (DONE 2026-04-28)
 
 Goal: implement the 62-digit per-pixel arithmetic needed to lift the CPU
 mode ceiling from 10³¹ to 10⁶².
 
-- `frontend/qd-f64.js`: `qdAdd`/`qdSub`/`qdMul`/`qdSqr`/`qdDiv`/`qdFromString`/
+- `qd-f64.js`: `qdAdd`/`qdSub`/`qdMul`/`qdSqr`/`qdDiv`/`qdFromString`/
   `qdPow10`/`qdNeg`/`qdToNumber`/`qdToDD`. Bailey-Hida sloppy variants from
   libqd. ~250 lines.
-- `frontend/test-cpu-render.mjs`: 11 new tests vs Decimal.js ground truth at
+- `test-cpu-render.mjs`: 11 new tests vs Decimal.js ground truth at
   ~62-digit precision. Includes Mandelbrot iteration sanity (c=−0.75 stays
   bounded, c=1 escapes early, 1+1e-60 ≠ 1).
 
@@ -85,20 +86,7 @@ Effort: medium. Lots of small touches across `main.js`, but the math is
 straightforward (everything currently doing `Math.log10(view.scale)` etc.
 gets a tiny helper).
 
-### ⏳ Iteration 4 — Jetson CUDA QD-f64 backend
-
-Goal: deep-zoom video at full resolution.
-
-- CUDA kernel using `double-double` (DD-f64) and `quad-double` (QD-f64) on
-  the Jetson Orin AGX. CUDA has native f64 unlike WebGPU — implementations
-  of DD/QD are well-established (CAMPARY, libqd-cuda, etc.).
-- Reference orbit + BLA still computed in MPFR (already done).
-- Per-precision-tier kernel: f32 (existing FF), DD-f64 (new), QD-f64 (new).
-- API: render request specifies depth, backend picks tier.
-
-Effort: large. Needs Jetson-side QD primitives + kernel + test infrastructure.
-
-### ⏳ Iteration 5 (research) — findReference improvements
+### ⏳ Iteration 4 (research) — findReference improvements
 
 Goal: longer reference orbits at "all-escape" views.
 
@@ -118,16 +106,15 @@ Approaches to try:
 
 This is research-level; pick one approach, prototype, measure.
 
-### ⏳ Iteration 6 — OD-f64 (octuple-double, 109 digits)
+### ⏳ Iteration 5 — OD-f64 (octuple-double, 109 digits)
 
-Goal: zoom past 10⁶². Only needed if iterations 1-5 are landing and depth
+Goal: zoom past 10⁶². Only needed if iterations 1-4 are landing and depth
 ambition grows further.
 
 - Same Bailey-Hida pattern as QD, with 8 components instead of 4.
 - Per-op cost ~16× DD-f64. CPU rendering at 10¹⁰⁰ would be ~hours per
   full-canvas frame even at low resolution; only practical for stills or
   ultra-low-res video.
-- For Jetson, OD on CUDA is ~doable (CAMPARY library has implementations).
 
 ## Cross-cutting concerns
 
@@ -143,7 +130,7 @@ also `MEMORY.md`'s "Architecture decisions" entry on this once added.
 ### Test discipline
 
 - All math primitives unit-tested against Decimal.js ground truth in
-  `frontend/test-cpu-render.mjs`.
+  `test-cpu-render.mjs`.
 - Test file imports both `cpu-render-core.js` and `qd-f64.js` so future
   precision tiers (TD-f64, OD-f64) get tested in the same harness.
 - Pipeline tests (orbit-worker → cpu-render-worker → renderTile) live
@@ -151,9 +138,10 @@ also `MEMORY.md`'s "Architecture decisions" entry on this once added.
 
 ### Handoff design
 
-For coordinates / seed library / interesting points, see `POINTS.md` (deep
-zoom catalogue). Bookmarks UI is a future iteration not on this plan; the
-file is ground truth for where to look first.
+Bookmarks UI (in-app seed library / interesting-point catalogue) is a future
+iteration not on this plan. Curated coordinates currently live as defaults
+inside `tests/render-sample.mjs` and as preset entries in the mandelbrot
+HUD's `presets` `<select>`.
 
 ## Atlas iteration — Fractal Atlas scope expansion (DONE 2026-05-25/26)
 
@@ -167,7 +155,7 @@ infrastructural centerpiece; everything else is built around it.
 - `fractal.html` — generic viewer for the other 10 fractals (julia, burning_ship, mandelbulb via escape-time; sierpinski, barnsley via IFS; koch, dragon via L-system; cantor, menger via subdivision; lorenz via RK4 ODE).
 - `game-of-life.html` — Conway's Game of Life with pattern picker.
 
-**Renderer pairs** under `frontend/assets/js/renderers/{,gpu/}` — every fractal has a CPU + WebGPU implementation; `create()` tries GPU first, silently falls back to CPU.
+**Renderer pairs** under `assets/js/renderers/{,gpu/}` — every fractal has a CPU + WebGPU implementation; `create()` tries GPU first, silently falls back to CPU.
 
 **Julia integration into main.js** (deep-zoom engine)
 - Single `kind: 0|1` UBO uniform branches the WGSL shader between Mandelbrot (`z₀=0, c per pixel`) and Julia (`z₀ per pixel, c = julia_c fixed`).
@@ -183,13 +171,35 @@ infrastructural centerpiece; everything else is built around it.
 **Information layer**
 - `assets/js/fractal-info.js` ships history/importance/references content for all 12 fractals + Game of Life. `window.showFractalInfo(id)` opens a modal. Info `i` button on every fractal page and every home tile (see [[reference-fractal-info-modal]]).
 
-**Deployment shift** — see [[jetson-ui-hidden]]
-- Site now ships as static files. Cloudflare Pages / Netlify / S3 / nginx all work.
-- Jetson backend hidden from UI but wiring (`/jetson/`, Dockerfile) still on disk.
+**Deployment shift**
+- Site ships as static files. Cloudflare Pages / Netlify / S3 / nginx all work.
 - favicon.ico (multi-resolution from `assets/renders/whole.png`).
+
+## Next iteration — build tooling + dev server
+
+The 2026-05-27 src/ restructure consciously deferred build tooling. Each per-
+fractal `src/<fractal>/index.html` is a hand-written file that duplicates the
+shared script tags. Acceptable now; a build step should resolve it.
+
+Targets for the next pass:
+- **A real bundler** (Vite is the natural fit — ES module-native, zero-config
+  dev server with HMR, drops the 17-script-tag chains into single imports).
+- **Per-fractal HTML generation** from a single template + per-fractal
+  config, so adding a new fractal is one new folder + one config object, not
+  a hand-edited HTML file.
+- **Dev server with proper module resolution** so `decimal.js` and friends
+  come from `node_modules/` instead of `esm.sh` CDN URLs.
+- **Test runner** (vitest) so `tests/test-*.mjs` participate in a normal
+  `npm test` flow instead of being run manually.
 
 ## Done log
 
+- 2026-05-27: **src/ restructure** — every fractal moved to its own folder
+  (`src/<id>/index.html`), shared engine + renderers + helpers consolidated
+  in `src/utils/`. Mandelbrot/Julia deep-zoom engine lives in
+  `src/utils/deep-zoom-engine/`. Generic viewer uses `<body
+  data-fractal-id>` as fallback to legacy `?type=` query param. Tests moved
+  to `tests/`. Build tooling deferred to the next iteration.
 - 2026-04-27: precision floor fix (`Decimal.set({precision: ...})` floor at 60)
   — deep clicks weren't moving view.cx because precision dropped after
   shallow `ensureReference` calls.

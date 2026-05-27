@@ -1,6 +1,6 @@
 // Tests for the CPU renderer core. Runs under Node:
 //
-//     node frontend/test-cpu-render.mjs
+//     node test-cpu-render.mjs
 //
 // Covers:
 //   1. DD-f64 arithmetic correctness vs. known exact answers.
@@ -19,12 +19,12 @@ import {
   ddAdd, ddMul, ddSub, ddScalePow2,
   iteratePixel, renderTile, palette, clampByte,
   iteratePixelQD, renderTileQD,
-} from './cpu-render-core.js';
+} from '../src/utils/deep-zoom-engine/cpu-render-core.js';
 import {
   qdFromNumber, qdFromString, qdAdd, qdSub, qdMul, qdSqr, qdDiv,
   qdToNumber, qdNeg, qdPow10,
-} from './qd-f64.js';
-import { pickSeedSource } from './seed-select.js';
+} from '../src/utils/deep-zoom-engine/qd-f64.js';
+import { pickSeedSource } from '../src/utils/deep-zoom-engine/seed-select.js';
 import Decimal from 'decimal.js';
 
 // ---------- Tiny test harness ----------

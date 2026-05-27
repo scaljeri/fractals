@@ -3,7 +3,7 @@
    dimension, history (HTML), importance (HTML), references (links).
    History/importance contain inline <a> tags — content is hand-authored
    and trusted, so the modal renders it via innerHTML.
-   Used by the i-button on mandelbrot.html, fractal.html, game-of-life.html. */
+   Used by the i-button on every src/<fractal>/index.html and the home grid. */
 
 // Shortcut helper for Wikipedia links (used heavily below).
 const wp = (slug, label) => `<a href="https://en.wikipedia.org/wiki/${slug}" target="_blank" rel="noopener noreferrer">${label ?? slug.replace(/_/g, ' ')}</a>`;

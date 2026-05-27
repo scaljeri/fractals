@@ -8,7 +8,7 @@ const FRACTALS = [
     formula: 'z := z² + c',
     desc: 'The boundary of c-values for which z := z² + c stays bounded. The icon of complex dynamics — and the only one here with infinite zoom.',
     live: true,
-    href: 'mandelbrot.html',
+    href: 'src/mandelbrot/',
     kind: 'mandelbrot',
   },
   {
@@ -17,7 +17,7 @@ const FRACTALS = [
     formula: 'z := z² + c · (c fixed)',
     desc: 'For each fixed c, the locus of starting z whose orbits never escape. A different shape for every c — shares the live WebGPU engine with Mandelbrot, infinite zoom included.',
     live: true,
-    href: 'mandelbrot.html?kind=julia&jre=-0.38&jim=0.61',
+    href: 'src/julia/',
     kind: 'escape-time',
     params: { kind: 'julia', cr: -0.7, ci: 0.27015, center: [0, 0], extent: 3.2 },
   },
@@ -114,7 +114,7 @@ const FRACTALS = [
     formula: 'B3 / S23',
     desc: 'A grid of cells. Live with 2–3 neighbours, born with exactly 3. Gliders, guns, and oscillators emerge.',
     live: true,
-    href: 'game-of-life.html',
+    href: 'src/game-of-life/',
     kind: 'life',
   },
 ];

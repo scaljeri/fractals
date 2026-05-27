@@ -4,8 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mandelbrot · calje</title>
-<link rel="icon" href="favicon.ico" sizes="any" />
-<link rel="stylesheet" href="assets/css/colors_and_type.css" />
+<link rel="icon" href="../../favicon.ico" sizes="any" />
+<link rel="stylesheet" href="../../assets/css/colors_and_type.css" />
 <style>
   /* ---------- page reset & stage ---------- */
   *, *::before, *::after { box-sizing: border-box; }
@@ -641,7 +641,7 @@
      (never hidden by `m`); position is fixed so it occupies the same spot
      regardless of fractal kind. -->
 <header id="brand-bar">
-  <a href="index.html" class="atlas-link" title="back to the fractal atlas (home)">← atlas</a>
+  <a href="../../index.html" class="atlas-link" title="back to the fractal atlas (home)">← atlas</a>
   <span class="sep">·</span>
   <span class="label" id="kind-label">mandelbrot</span>
   <button id="info-btn" class="info-btn" title="about this fractal" aria-label="info">i</button>
@@ -707,9 +707,6 @@
     <input id="coord-re" class="pill coord" type="text" value="-0.743643887037151" placeholder="click" title="Real part">
     <span class="label">im</span>
     <input id="coord-im" class="pill coord" type="text" value="0.131825904205330" placeholder="click" title="Imaginary part">
-    <!-- "jobs" link to the Jetson render-jobs dashboard removed from UI;
-         stub kept hidden so main.js's jetsonLink reference doesn't crash. -->
-    <a id="jetson-link" class="pill" target="_blank" rel="noopener" style="display:none !important" title="(Jetson backend disabled)">jobs</a>
     <button id="auto-zoom" class="pill" title="Auto-zoom toward the canvas centre. Click to start/stop.">▶ auto</button>
     <button id="copy-clipboard" class="pill" title="Copy view to clipboard as PNG.">copy</button>
     <button id="screenshot" class="pill" title="Download view as PNG file.">screenshot</button>
@@ -799,19 +796,6 @@
       <label><input type="radio" name="rec-renderer" value="cpu"> CPU</label>
       <span class="hint">auto = CPU past 10²⁰ zoom</span>
     </div>
-    <label class="target">
-      <input type="checkbox" id="rec-browser" checked>
-      <span>browser</span>
-      <span class="hint">local, H.264 via WebCodecs</span>
-    </label>
-    <!-- Jetson recording option removed from the UI — no GPU backend deployed.
-         Stub kept hidden so main.js's recJetsonCb / recJetsonLabel / recJetsonHint
-         references don't crash on null. -->
-    <label class="target" id="rec-jetson-label" style="display:none">
-      <input type="checkbox" id="rec-jetson">
-      <span>jetson</span>
-      <span class="hint" id="rec-jetson-hint">checking…</span>
-    </label>
     <div class="actions">
       <button id="rec-modal-cancel" class="pill">cancel</button>
       <button id="rec-modal-start" class="pill">start</button>
@@ -884,9 +868,7 @@
   <b>calje</b><span class="sep">·</span><span>mandelbrot</span><span class="sep">·</span><span class="acc">z := z² + c</span>
 </div>
 
-<!-- Per-machine config (gitignored). Optional; defaults apply if missing. -->
-<script src="config.local.js" onerror="this.remove()"></script>
-<script src="assets/js/fractal-info.js"></script>
+<script src="../utils/fractal-info.js"></script>
 <script>
   // Menu handle + 'm' hotkey for chrome toggle. Hooked here so it's wired
   // before main.js (which is a module and would otherwise race the click).
@@ -899,7 +881,7 @@
     } else if (e.key === 'Escape') {
       // 'esc' returns to the atlas — unless a modal is open
       const modalOpen = document.querySelector('#record-modal.active, #stats-modal.active, #arm-bar.active, #fractal-info-modal.active');
-      if (!modalOpen) location.href = 'index.html';
+      if (!modalOpen) location.href = '../../index.html';
     }
   });
   // Info "i" button — opens the fractal info dialog. Uses URL kind so it
@@ -909,6 +891,6 @@
     window.showFractalInfo(isJulia ? 'julia' : 'mandelbrot');
   });
 </script>
-<script type="module" src="main.js"></script>
+<script type="module" src="../utils/deep-zoom-engine/main.js"></script>
 </body>
 </html>

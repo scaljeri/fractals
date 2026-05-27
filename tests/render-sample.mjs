@@ -4,14 +4,14 @@
 // the worker pool — just the pure render math from cpu-render-core.js.
 //
 // Usage:
-//     node frontend/render-sample.mjs [re] [im] [zoomExp] [w] [h] [maxIter]
+//     node render-sample.mjs [re] [im] [zoomExp] [w] [h] [maxIter]
 //
-// Defaults: the "Reverse Mandelbrot" point from POINTS.md at zoom 10^30,
-// rendered into a 120×60 buffer.
+// Defaults: the "Reverse Mandelbrot" point at zoom 10^30, rendered into a
+// 120×60 buffer.
 
 import Decimal from 'decimal.js';
 import { writeFileSync } from 'node:fs';
-import { renderTile } from './cpu-render-core.js';
+import { renderTile } from '../src/utils/deep-zoom-engine/cpu-render-core.js';
 
 const cReStr   = process.argv[2] || '-0.7436330243708595014205007223';
 const cImStr   = process.argv[3] || '0.1414274379137962191116841227';
