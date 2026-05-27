@@ -126,20 +126,17 @@ The Mandelbrot/Julia deep-zoom engine is where the next round of work lands:
 - **`view.scale` mantissa + exponent** — replace the `f64` scalar with
   `{m, e}` so navigation no longer underflows at 10³⁰⁷. Unlocks arbitrarily
   deep zoom on the camera-state side.
+- **OD-f64 for perpetual zoom past 10⁶²** — once QD-f64 is wired up, the
+  next tier is octuple-double (~109 digits), following the same Bailey-Hida
+  pattern as `qd-f64.js`. Combined with the `view.scale` refactor above,
+  this is the path to a true perpetual / infinite-zoom deep dive. See
+  `.claude/PLAN.md` iterations 3 & 5 for the gritty details.
 - **Hierarchical BLA** — current single-level skip=16 plateaus around zoom
   10⁴-10⁶. Multi-level BLA (adaptive skip 2⁰..2^L) is the literature-
   proven 10-100× speed-up at zoom 10⁸+.
 - **Build tooling + dev server** — Vite or similar, so the 9 per-fractal
   HTML files stop hand-duplicating shared `<script>` chains and tests run
   via `npm test`.
-
-## TODO
-
-- **Perpetual / infinite zoom deep dive** — push the Mandelbrot/Julia engine
-  past the current 10⁶² CPU ceiling. Requires OD-f64 (octuple-double, ~109
-  digits) following the same Bailey-Hida pattern as QD-f64, plus the
-  `view.scale` mantissa/exponent refactor so camera state stops underflowing
-  at 10³⁰⁷. See `.claude/PLAN.md` iterations 3 & 5 for the gritty details.
 
 ## Credits
 
