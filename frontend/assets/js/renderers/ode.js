@@ -1,15 +1,27 @@
 /* ODE-trajectory renderer.
-   Integrates a continuous dynamical system (Lorenz, etc.) with RK4 and
-   plots the projected trajectory as a log-density image.
-
-   This is the same "accumulate hits → log-normalize → colorize" pipeline
-   used by the IFS renderer; only the point source differs. */
+   Integrates a continuous dynamical system (Lorenz, etc.) with RK4, accumulates
+   per-pixel hit counts plus a per-pixel sum of the orthogonal "depth" axis,
+   then colorizes log-density modulated by the palette gradient sampled by
+   average depth — so the two lobes of the Lorenz butterfly pick contrasting
+   hues across the palette. */
 
 (function () {
+  // y_sum stores per-pixel sum of (y_norm × Y_FP) for fixed-point averaging.
+  const Y_FP = 1024;
+
+  const DEFAULT_VARIANT = {
+    sigma: 10, rho: 28, beta: 8/3,
+    bounds: [-22, 0, 22, 50],
+  };
+
+  function yRangeFor(variant) {
+    const xExtent = Math.max(Math.abs(variant.bounds[0]), Math.abs(variant.bounds[2]));
+    const y = xExtent * 1.4;
+    return [-y, y];
+  }
+
   const SYSTEMS = {
     lorenz: {
-      // Lorenz '63 — canonical butterfly parameters
-      params: { sigma: 10, rho: 28, beta: 8/3 },
       derive(state, p) {
         const [x, y, z] = state;
         return [
@@ -18,13 +30,11 @@
           x * y - p.beta * z,
         ];
       },
-      // 2D projection (default = x,z which gives the classic butterfly)
       project([x, _y, z]) { return [x, z]; },
-      bounds: [-25, 0, 25, 50],         // xmin, ymin (=zmin), xmax, ymax (=zmax)
+      depth([_x, y, _z]) { return y; },
       initial: [0.1, 0.0, 0.0],
-      dt: 0.005,
       steps: 250_000,
-      warmup: 200,
+      warmup: 1000,
     },
   };
 
@@ -45,23 +55,26 @@
     const ctx = canvas.getContext('2d', { alpha: false });
     const sys = SYSTEMS[params.kind];
     if (!sys) throw new Error('ode: unknown system ' + params.kind);
-    let accent = palette.accent || [124, 255, 107];
+    let lut = PaletteLUT.buildLUT(palette.stops);
     let cancelToken = 0;
 
     const MAX_STEPS = 8_000_000;
-    const [xmin, ymin, xmax, ymax] = sys.bounds;
+
+    let variant = params.variant || DEFAULT_VARIANT;
+    let [yMin, yMax] = yRangeFor(variant);
+    let yRangeInv = 1.0 / (yMax - yMin);
+
     const defaultView = {
-      cx: (xmin + xmax) * 0.5,
-      cy: (ymin + ymax) * 0.5,
-      // Fit the y range with a small breathing margin.
-      extent: (ymax - ymin) / 0.88,
+      cx: (variant.bounds[0] + variant.bounds[2]) * 0.5,
+      cy: (variant.bounds[1] + variant.bounds[3]) * 0.5,
+      extent: (variant.bounds[3] - variant.bounds[1]) / 0.88,
     };
     const view = { ...defaultView };
 
     function viewTransform(w, h) {
-      const s = h / view.extent;       // pixels per projected-unit (vertical)
+      const s = h / view.extent;
       const ox = w * 0.5 - view.cx * s;
-      const oy = h * 0.5 + view.cy * s; // y flipped to screen-space
+      const oy = h * 0.5 + view.cy * s;
       return (x, y) => [ox + x * s, oy - y * s];
     }
 
@@ -74,18 +87,28 @@
       const myToken = ++cancelToken;
       const w = canvas.width, h = canvas.height;
 
-      ctx.fillStyle = '#0a0a0a';
+      ctx.fillStyle = '#08080a';
       ctx.fillRect(0, 0, w, h);
 
       const project = viewTransform(w, h);
       const density = new Uint32Array(w * h);
-      const p = sys.params;
+      const ySum    = new Uint32Array(w * h);
+      const p = { sigma: variant.sigma, rho: variant.rho, beta: variant.beta };
       let state = sys.initial.slice();
-      const dt = sys.dt;
+      // Faster trajectories at high ρ → shorter dt so consecutive RK4 steps
+      // don't span huge distances.
+      const dt = 0.005 * Math.sqrt(28 / Math.max(variant.rho, 1));
 
       for (let i = 0; i < sys.warmup; i++) {
         state = rk4(state, dt, sys.derive, p);
       }
+
+      // Track the previous projected position so we can rasterize a
+      // continuous segment per integration step. Point splats alone leave
+      // gaps in the fast transit phase between lobes (the trajectory can
+      // skip several pixels per step there).
+      let [pxPrev2, pyPrev2] = sys.project(state);
+      [pxPrev2, pyPrev2] = project(pxPrev2, pyPrev2);
 
       const total = stepsForView();
       const CHUNK = 8_000;
@@ -96,11 +119,27 @@
         for (let i = 0; i < todo; i++) {
           state = rk4(state, dt, sys.derive, p);
           const [px2, py2] = sys.project(state);
-          const [pxF, pyF] = project(px2, py2);
-          const px = pxF | 0, py = pyF | 0;
-          if (px >= 0 && px < w && py >= 0 && py < h) {
-            density[py * w + px]++;
+          const [pxCur, pyCur] = project(px2, py2);
+          const dx = pxCur - pxPrev2;
+          const dy = pyCur - pyPrev2;
+          const segLen = Math.max(Math.abs(dx), Math.abs(dy));
+          const nSub = Math.max(1, Math.min(64, segLen | 0 || 1));
+          const stepDx = dx / nSub;
+          const stepDy = dy / nSub;
+          const yNorm = Math.max(0, Math.min(1, (sys.depth(state) - yMin) * yRangeInv));
+          const yQuant = (yNorm * Y_FP) | 0;
+          for (let k = 0; k < nSub; k++) {
+            const pxS = pxPrev2 + stepDx * (k + 0.5);
+            const pyS = pyPrev2 + stepDy * (k + 0.5);
+            const ix = Math.floor(pxS);
+            const iy = Math.floor(pyS);
+            if (ix < 0 || ix >= w || iy < 0 || iy >= h) continue;
+            const idx = iy * w + ix;
+            density[idx]++;
+            ySum[idx] += yQuant;
           }
+          pxPrev2 = pxCur;
+          pyPrev2 = pyCur;
         }
         done += todo;
         onProgress?.({
@@ -113,29 +152,50 @@
         if (myToken !== cancelToken) return;
       }
 
-      // normalize density via log
       let max = 1;
       for (let i = 0; i < density.length; i++) if (density[i] > max) max = density[i];
       const logMax = Math.log(max + 1);
+      const LUT_N = lut.length / 4;
 
       const img = ctx.createImageData(w, h);
       const data = img.data;
-      const [ar, ag, ab] = accent;
+      const palLo = 0.08, palHi = 0.92, gamma = 0.9;
+      const bgR = 8, bgG = 8, bgB = 10;
       for (let i = 0; i < density.length; i++) {
         const d = density[i];
-        if (!d) { data[i * 4 + 3] = 255; continue; }
-        const t = Math.min(1, Math.log(d + 1) / logMax);
-        const tt = Math.pow(t, 0.55);
-        data[i * 4    ] = (10 + (ar - 10) * tt) | 0;
-        data[i * 4 + 1] = (10 + (ag - 10) * tt) | 0;
-        data[i * 4 + 2] = (10 + (ab - 10) * tt) | 0;
-        data[i * 4 + 3] = 255;
+        if (!d) {
+          data[i*4]   = bgR;
+          data[i*4+1] = bgG;
+          data[i*4+2] = bgB;
+          data[i*4+3] = 255;
+          continue;
+        }
+        const t = Math.max(0, Math.min(1, Math.log(d + 1) / logMax * 1.15));
+        const bright = Math.pow(t, gamma);
+        const yAvg = Math.max(0, Math.min(1, ySum[i] / (d * Y_FP)));
+        const palT = palLo + (palHi - palLo) * yAvg;
+        const li = Math.min(LUT_N - 1, (palT * (LUT_N - 1)) | 0) * 4;
+        data[i*4]   = (bgR + (lut[li]   - bgR) * bright) | 0;
+        data[i*4+1] = (bgG + (lut[li+1] - bgG) * bright) | 0;
+        data[i*4+2] = (bgB + (lut[li+2] - bgB) * bright) | 0;
+        data[i*4+3] = 255;
       }
       ctx.putImageData(img, 0, 0);
     }
 
     function setPalette(p) {
-      accent = p.accent || accent;
+      lut = PaletteLUT.buildLUT(p.stops);
+      render();
+    }
+
+    function setVariant(v) {
+      variant = v || DEFAULT_VARIANT;
+      [yMin, yMax] = yRangeFor(variant);
+      yRangeInv = 1.0 / (yMax - yMin);
+      defaultView.cx     = (variant.bounds[0] + variant.bounds[2]) * 0.5;
+      defaultView.cy     = (variant.bounds[1] + variant.bounds[3]) * 0.5;
+      defaultView.extent = (variant.bounds[3] - variant.bounds[1]) / 0.88;
+      Object.assign(view, defaultView);
       render();
     }
 
@@ -144,7 +204,6 @@
       const projectedPerPx = view.extent / rect.height;
       const dx = (cssX - rect.left - rect.width  * 0.5) * projectedPerPx;
       const dy = (cssY - rect.top  - rect.height * 0.5) * projectedPerPx;
-      // Projected y grows upward; screen y grows downward.
       view.cx += dx;
       view.cy -= dy;
       view.extent /= factor;
@@ -156,7 +215,7 @@
       render();
     }
 
-    return { render, setPalette, zoomAt, reset, view, backend: 'cpu' };
+    return { render, setPalette, setVariant, zoomAt, reset, view, backend: 'cpu' };
   }
 
   async function create(opts) {

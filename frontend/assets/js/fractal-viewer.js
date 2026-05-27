@@ -52,15 +52,18 @@
   fitCanvas();
 
   /* ---------- palette ---------- */
-  const PAL_IDS = ['phosphor', 'warm', 'ember', 'abyss', 'ivory'];
+  const PAL_IDS = ['phosphor', 'warm', 'ember', 'abyss', 'ivory', 'spectrum', 'aurora'];
+  // Resolution order: ?palette= URL param → localStorage → fractal's
+  // defaultPalette → first in PAL_IDS.
   let palIdx = 0;
-  try {
-    const saved = localStorage.getItem('fractal-palette-' + f.id);
-    if (saved) {
-      const k = PAL_IDS.indexOf(saved);
-      if (k >= 0) palIdx = k;
-    }
-  } catch {}
+  const palParam = params.get('palette');
+  let savedPal = null;
+  try { savedPal = localStorage.getItem('fractal-palette-' + f.id); } catch {}
+  const palPick = (palParam && PAL_IDS.includes(palParam)) ? palParam
+               : (savedPal  && PAL_IDS.includes(savedPal))  ? savedPal
+               : (f.defaultPalette && PAL_IDS.includes(f.defaultPalette)) ? f.defaultPalette
+               : PAL_IDS[0];
+  palIdx = PAL_IDS.indexOf(palPick);
 
   PAL_IDS.forEach((id, i) => {
     const p = PALETTES[id];
@@ -115,15 +118,50 @@
     }
   }
 
+  /* ---------- variant dropdown (e.g. Lorenz parameter presets) ---------- */
+  let initialVariantKey = null;
+  if (f.variants) {
+    const variantKeys = Object.keys(f.variants);
+    const fromUrl = params.get('variant');
+    let saved = null;
+    try { saved = localStorage.getItem('fractal-variant-' + f.id); } catch {}
+    initialVariantKey = (fromUrl && f.variants[fromUrl]) ? fromUrl
+                      : (saved   && f.variants[saved])   ? saved
+                      : (f.defaultVariant && f.variants[f.defaultVariant]) ? f.defaultVariant
+                      : variantKeys[0];
+  }
+  const initialParams = { ...(f.params || {}) };
+  if (initialVariantKey) initialParams.variant = f.variants[initialVariantKey];
+
   const renderer = await RendererModule.create({
     canvas,
     palette: PALETTES[PAL_IDS[palIdx]],
-    params: f.params || {},
+    params: initialParams,
     onProgress,
   });
 
   // Surface the backend (gpu / cpu) where the legacy "cpus" stat lives.
   cpusEl.textContent = renderer.backend === 'webgpu' ? 'gpu' : (renderer.workerCount ?? 'cpu');
+
+  if (f.variants && renderer.setVariant) {
+    const variantRow = $('variantRow');
+    const variantSelect = $('variantSelect');
+    Object.entries(f.variants).forEach(([key, v]) => {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = v.name;
+      if (key === initialVariantKey) opt.selected = true;
+      variantSelect.appendChild(opt);
+    });
+    variantSelect.addEventListener('change', () => {
+      const key = variantSelect.value;
+      try { localStorage.setItem('fractal-variant-' + f.id, key); } catch {}
+      if (typeof stopDive === 'function' && diveActive) stopDive({ settle: false });
+      renderer.setVariant(f.variants[key]);
+      toastMsg('variant: ' + f.variants[key].name);
+    });
+    variantRow.style.display = 'flex';
+  }
 
   renderer.render();
 

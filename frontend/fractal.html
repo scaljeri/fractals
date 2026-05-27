@@ -40,6 +40,19 @@
   }
   .stat-row b { color: var(--fg); font-weight: 700; font-variant-numeric: tabular-nums; }
 
+  .variant-select {
+    flex: 1; min-width: 0;
+    background: var(--ink-1, #0a0a0a);
+    color: var(--fg, #f2f0ea);
+    border: 1px solid var(--line, #2a2a2a);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font: 11px var(--font-mono, monospace);
+    cursor: pointer;
+  }
+  .variant-select:hover { border-color: var(--accent); }
+  .variant-select:focus { outline: none; border-color: var(--accent); }
+
   #progress {
     position: fixed; left: 0; right: 0; bottom: 0;
     height: 1px;
@@ -149,6 +162,10 @@
     <div id="paletteRow" class="menu__row">
       <span class="label">palette</span>
       <div id="swatches" class="swatches"></div>
+    </div>
+    <div id="variantRow" class="menu__row" style="display:none; margin-top:8px;">
+      <span class="label">variant</span>
+      <select id="variantSelect" class="variant-select"></select>
     </div>
   </div>
 

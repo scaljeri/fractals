@@ -156,7 +156,6 @@ depends on how the frontend is deployed:
 |---|---|
 | `docker compose up -d` (local dev) | Set `JETSON_URL` env before starting — the Caddy container proxies `/gpu/*` there |
 | Caddy-on-VM | VM Caddyfile: `handle_path /gpu/* { reverse_proxy <jetson-ip>:$PORT }` — see [../DEPLOY.md](../DEPLOY.md) |
-| Helm on k3s | Set `jetson.externalHost` + `externalPort` in `my-values.yaml` — chart creates an `ExternalName` Service + Traefik StripPrefix middleware. See [../helm/mandelbrot/README.md](../helm/mandelbrot/README.md) |
 
 If the Jetson is unreachable, the frontend hides the `jetson` button
 automatically (30-second health-check). No special handling needed on the

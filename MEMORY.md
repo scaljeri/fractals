@@ -80,16 +80,15 @@ FastAPI that's the main thread at startup, but renders run via
 module load, then `cuda.Device(0).make_context()` / `ctx.pop()` /
 `ctx.detach()` per render call on whatever thread executes it.
 
-### Jetson stays outside the k3s cluster
+### Jetson runs natively, not in any cluster
 Jetson Orin AGX hosts the CUDA + FFmpeg render service natively (systemd).
-The cluster reaches it via a Helm-templated `Service: ExternalName` pointing
-at a LAN/Tailscale address, with a Traefik StripPrefix middleware turning
-`/gpu/*` into the backend's normal paths.
+The static frontend (served by an external static host) reaches it via a
+reverse-proxy hop at `/gpu/*`.
 
 **Why:** running CUDA workloads in k3s would need the nvidia-container
 runtime, GPU scheduling, and a device-plugin — out of scope.
 **How to apply:** if new GPU workloads appear, default to native-on-the-
-Jetson + ingress-proxy before reaching for in-cluster GPU scheduling.
+Jetson + reverse-proxy before reaching for in-cluster GPU scheduling.
 
 ### libx264 with `-threads 10` (for now)
 Ubuntu's apt ffmpeg is built **without NVENC**. First deploy hit
@@ -299,7 +298,6 @@ Legend: ✓ works · ✗ off/broken · ⏳ partially done / untested in prod
 - ✓ Manage-jobs dashboard at `/manage-jobs.html` with live inflight indicator + timing bar
 - ✓ Browser-fake test script `scripts/fake-browser.py` surfaces server errors verbatim
 - ✓ pytest live tests (health / render / download / FF golden size-sanity)
-- ⏳ Helm chart exists in `helm/mandelbrot/`, never deployed to a real cluster
 - ✓ MPFR / gmpy2 reference orbit on Jetson (`precision_bits_for_scale` adapts per render; zoom no longer capped at f64's ~10¹³)
 
 ---
@@ -365,16 +363,10 @@ python3 -m pytest jetson/tests -v
 
 # benchmark
 python3 jetson/scripts/fake-browser.py --frames 300 --width 960 --height 540
-
-# helm (future)
-helm install mandelbrot ./helm/mandelbrot \
-  -n mandelbrot --create-namespace \
-  -f my-values.yaml
 ```
 
-Details in [AGENTS.md](AGENTS.md), [DEPLOY.md](DEPLOY.md),
-[jetson/README.md](jetson/README.md), and
-[helm/mandelbrot/README.md](helm/mandelbrot/README.md).
+Details in [AGENTS.md](AGENTS.md), [DEPLOY.md](DEPLOY.md), and
+[jetson/README.md](jetson/README.md).
 
 ---
 

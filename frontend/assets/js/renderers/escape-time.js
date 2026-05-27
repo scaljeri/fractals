@@ -28,7 +28,9 @@
     function computeMaxIter() {
       // shallow zoom: a fixed iteration ceiling is fine.
       // Scale modestly with extent so deeper zooms (smaller extent) get more iters.
-      const base = 384;
+      // Burning ship's antennas are razor-thin; needs ~2x the iters of Mandelbrot
+      // to resolve them at the same zoom.
+      const base = params.kind === 'burning_ship' ? 768 : 384;
       const zoomFactor = (params.extent ?? 3.0) / Math.max(1e-12, view.extent);
       const m = Math.round(base + 80 * Math.log10(Math.max(1, zoomFactor)));
       lastIterCount = Math.max(64, Math.min(8000, m));

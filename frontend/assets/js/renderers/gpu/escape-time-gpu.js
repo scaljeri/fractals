@@ -158,7 +158,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     function computeMaxIter() {
       const baseExtent = params.extent ?? 3.0;
       const zoomFactor = baseExtent / Math.max(1e-12, view.extent);
-      const m = Math.round(384 + 80 * Math.log10(Math.max(1, zoomFactor)));
+      // Burning ship's antennas are razor-thin; needs ~2x the iters of Mandelbrot
+      // to resolve them at the same zoom.
+      const baseIter = params.kind === 'burning_ship' ? 768 : 384;
+      const m = Math.round(baseIter + 80 * Math.log10(Math.max(1, zoomFactor)));
       return Math.max(64, Math.min(8000, m));
     }
 

@@ -27,7 +27,7 @@ const FRACTALS = [
     formula: 'z := (|re| + i|im|)² + c',
     desc: "Mandelbrot's recurrence with absolute values before squaring. The bend produces sails, masts, antennae.",
     kind: 'escape-time',
-    params: { kind: 'burning_ship', center: [-0.5, -0.5], extent: 3.0 },
+    params: { kind: 'burning_ship', center: [-0.5, -0.5], extent: 2.4 },
   },
   {
     id: 'mandelbulb', name: 'Mandelbulb',
@@ -94,6 +94,19 @@ const FRACTALS = [
     desc: 'Three coupled ODEs from atmospheric convection. Trajectories spiral around two centers but never repeat — projected here to the x-z plane.',
     kind: 'ode',
     params: { kind: 'lorenz' },
+    defaultPalette: 'spectrum',
+    defaultVariant: 'sparrow',
+    /* Named parameter regimes for the Lorenz '63 system. Each preset bundles
+       (σ, ρ, β) with a default bounding box for view auto-fit. Used by the
+       generic viewer to render a "variant" dropdown when present. */
+    variants: {
+      butterfly:   { name: 'Butterfly (ρ=28)',         sigma: 10, rho: 28,    beta: 8/3, bounds: [-22,  0,  22,  50] },
+      stretched:   { name: 'Stretched (ρ=99.96)',      sigma: 10, rho: 99.96, beta: 8/3, bounds: [-50,  0,  50, 160] },
+      preTurb:     { name: 'Pre-turbulent (ρ=24.5)',   sigma: 10, rho: 24.5,  beta: 8/3, bounds: [-18,  0,  18,  40] },
+      burst:       { name: 'Burst chaos (ρ=160)',      sigma: 10, rho: 160,   beta: 8/3, bounds: [-80,  0,  80, 250] },
+      doubled:     { name: 'Period-doubled (ρ=212)',   sigma: 10, rho: 212,   beta: 8/3, bounds: [-95,100,  95, 320] },
+      sparrow:     { name: "Sparrow's knot (σ=16)",    sigma: 16, rho: 45.92, beta: 4,   bounds: [-25,  0,  25,  70] },
+    },
   },
   {
     id: 'game_of_life', name: "Conway's Game of Life",
@@ -169,6 +182,39 @@ const PALETTES = {
       [0.00, [  0,   0,   0]],
       [0.50, [242, 240, 234]],
       [1.00, [  0,   0,   0]],
+    ],
+  },
+  spectrum: {
+    name: 'spectrum',
+    swatch: 'linear-gradient(135deg,#30123b 0%,#1e7be8 20%,#1de3a0 40%,#f7e62a 60%,#ff7a14 80%,#7a0403 100%)',
+    accent: [255, 130,  30],
+    /* Inspired by Google's "turbo" colormap — a perceptually monotone rainbow
+       (purple → blue → cyan → green → yellow → orange → red) that, combined
+       with y-depth palette sampling in the ODE renderer, gives every nested
+       orbit a distinct hue. */
+    stops: [
+      [0.00, [ 48,  18,  59]],
+      [0.13, [ 60,  78, 194]],
+      [0.25, [ 32, 144, 240]],
+      [0.40, [ 22, 220, 200]],
+      [0.55, [120, 230,  60]],
+      [0.68, [247, 230,  42]],
+      [0.80, [255, 122,  20]],
+      [0.92, [200,  30,  18]],
+      [1.00, [122,   4,   3]],
+    ],
+  },
+  aurora: {
+    name: 'aurora',
+    swatch: 'linear-gradient(135deg,#001022 0%,#00ffaa 40%,#88d6ff 70%,#ff44cc 100%)',
+    accent: [88, 230, 255],
+    stops: [
+      [0.00, [  0,  10,  28]],
+      [0.20, [  0,  70, 110]],
+      [0.42, [  0, 230, 150]],
+      [0.62, [120, 220, 255]],
+      [0.82, [255,  80, 200]],
+      [1.00, [ 60,   0,  70]],
     ],
   },
 };

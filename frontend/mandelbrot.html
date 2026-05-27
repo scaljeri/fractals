@@ -864,8 +864,6 @@
   <div class="hk-row"><span class="key">⌘ C</span><span class="label">save png</span></div>
   <div class="hk-row"><span class="key">⌘ ⇧ C</span><span class="label">copy png</span></div>
   <div class="hk-row"><span class="key">esc</span><span class="label">close modal</span></div>
-  <div class="hk-title" style="margin-top:var(--s-3)">julia</div>
-  <div class="hk-row" style="grid-template-columns:1fr"><span class="label">edit <b style="color:var(--fg)">kind</b> + <b style="color:var(--fg)">c</b> in panel</span></div>
 </aside>
 
 <!-- Julia c-picker: a small Mandelbrot thumbnail. Visible only in Julia mode
@@ -886,6 +884,8 @@
   <b>calje</b><span class="sep">·</span><span>mandelbrot</span><span class="sep">·</span><span class="acc">z := z² + c</span>
 </div>
 
+<!-- Per-machine config (gitignored). Optional; defaults apply if missing. -->
+<script src="config.local.js" onerror="this.remove()"></script>
 <script src="assets/js/fractal-info.js"></script>
 <script>
   // Menu handle + 'm' hotkey for chrome toggle. Hooked here so it's wired

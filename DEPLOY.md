@@ -1,21 +1,34 @@
-# Deployment: mandelbrot.calje.eu
+# Deployment
 
-This doc covers two deployment paths:
+This doc covers the **Caddy-on-VM** path: a single VM (or any static host
+behind a reverse-proxy) serving the frontend and proxying `/gpu/*` to the
+Jetson. The Jetson runs natively, outside the VM.
 
-1. **Caddy-on-VM** (sections 1–5 below) — single VM running Caddy as both static
-   host and reverse-proxy. Simple, no Kubernetes needed.
-2. **Helm on k3s** (see the end of this file and
-   [helm/mandelbrot/README.md](helm/mandelbrot/README.md)) — frontend runs as a
-   Deployment behind Traefik, Jetson wired in via ExternalName Service.
+## Per-machine config (do this first)
 
-Both paths keep the **Jetson native (outside the cluster/VM)**. Pick whichever
-matches your infra.
+Everything env-specific lives in **gitignored** files. Copy the templates and
+fill in your values:
+
+```sh
+# Browser-side runtime config (production hostname + LAN Jetson URL)
+cp frontend/config.example.js frontend/config.local.js
+
+# Frontend deploy target (rsync over SSH)
+cp frontend/.env.example frontend/.env
+
+# Jetson SSH target + remote path (used by jetson/scripts/deploy.sh)
+cp jetson/.env.example jetson/.env
+```
+
+The tracked code reads from `window.MANDELBROT_CONFIG` (set by
+`config.local.js`) and falls back to safe defaults if the file is absent — so a
+fresh clone runs out of the box, just without the production-hostname shortcut.
 
 ## Overview
 
 ```
                      ┌──────────────────────────────┐
-                     │  mandelbrot.calje.eu (Caddy) │
+                     │  <your-domain> (Caddy)       │
   Browser ──HTTPS──▶ │                              │
                      │  /        → static files     │
                      │  /gpu/*   → Jetson Orin      │
@@ -30,13 +43,13 @@ matches your infra.
 ```
 
 The frontend (`index.html`, `main.js`) is fully static — it detects whether it
-is served from the production hostname (`mandelbrot.calje.eu`) or not and
-points the Jetson URL accordingly:
+is served from `MANDELBROT_CONFIG.productionHost` or not and points the Jetson
+URL accordingly:
 
 | Context | Jetson URL used |
 |---|---|
-| `https://mandelbrot.calje.eu/` | `https://mandelbrot.calje.eu/gpu` (same-origin reverse proxy) |
-| `http://localhost:8765/` (local dev) | from `localStorage.jetsonUrl`, or prompted once |
+| `https://<your-domain>/` (matches `productionHost`) | `https://<your-domain>/gpu` (same-origin reverse proxy) |
+| `http://localhost:8765/` (local dev) | `MANDELBROT_CONFIG.lanJetsonUrl`, or `localStorage.jetsonUrl`, or prompt |
 
 If the Jetson is unreachable (home network offline, service down, etc.) the
 browser hides the `jetson` button entirely. It rechecks every 30 s so the
@@ -46,21 +59,26 @@ button reappears when the Jetson comes back.
 
 ## 1. Host the static browser app
 
-The app has no build step — just serve `index.html` + `main.js`. Any static
-host works: Caddy `file_server`, nginx, GitHub Pages, Cloudflare Pages, etc.
+The app has no build step — just serve `frontend/` contents. Any static host
+works: Caddy `file_server`, nginx, GitHub Pages, Cloudflare Pages, etc.
 
-Minimum files:
+For an `rsync`-over-SSH deploy, fill in `frontend/.env` and run:
+
+```sh
+cd frontend
+./scripts/deploy.sh             # rsync to $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR
+./scripts/deploy.sh --dry-run   # preview without copying
 ```
-index.html
-main.js
-```
+
+The script excludes `node_modules/`, test helpers, `*.ppm` outputs, and the
+gitignored `.env` / `config.local.js` themselves.
 
 ## 2. Configure Caddy (or nginx) reverse-proxy
 
 See `Caddyfile.example` at the repo root. Short version:
 
 ```caddy
-mandelbrot.calje.eu {
+<your-domain> {
     root * /var/www/mandelbrot
     file_server
     handle_path /gpu/* {
@@ -72,13 +90,14 @@ mandelbrot.calje.eu {
 }
 ```
 
-- Replace `<jetson-ip>` with your Jetson's LAN IP (or Tailscale / Wireguard address).
+- Replace `<your-domain>` and `<jetson-ip>` with your real values.
 - Long `read_timeout` / `write_timeout` let 60-minute renders survive and large
   mp4 downloads complete without being cut off.
 
 Deploy:
 ```sh
 sudo cp Caddyfile.example /etc/caddy/Caddyfile
+# edit /etc/caddy/Caddyfile to substitute the placeholders
 sudo systemctl reload caddy
 ```
 
@@ -107,7 +126,7 @@ Test from the Caddy host:
 ```sh
 curl http://<jetson-ip>:8080/jobs
 # or from the internet
-curl https://mandelbrot.calje.eu/gpu/jobs
+curl https://<your-domain>/gpu/jobs
 ```
 
 Both should return `{"current":null,"queue_size":0,"jobs":[]}`.
@@ -117,22 +136,24 @@ Both should return `{"current":null,"queue_size":0,"jobs":[]}`.
 Nothing changes for local dev. Run the static app via any HTTP server:
 
 ```sh
-cd /Users/luca/dev/mandelbrot/frontend
+cd frontend
 python3 -m http.server 8765
 ```
 
-Open `http://localhost:8765` — the first time you click the `jetson` button you
-get a prompt asking for the Jetson URL (stored in localStorage thereafter).
+Open `http://localhost:8765` — if `config.local.js` sets `lanJetsonUrl`, the
+page uses that directly. Otherwise the first time you click the `jetson`
+button you get a prompt asking for the Jetson URL (stored in localStorage
+thereafter).
 
 When you want to test against the prod Jetson route while developing locally,
-manually set the URL to `https://mandelbrot.calje.eu/gpu` in the prompt, or
-clear localStorage and set it directly in the dev tools.
+manually set the URL to `https://<your-domain>/gpu` in the prompt, or clear
+localStorage and set it directly in the dev tools.
 
 ---
 
 ## CORS notes
 
-- Production (`mandelbrot.calje.eu/gpu`): same-origin, no CORS needed.
+- Production (`<your-domain>/gpu`): same-origin, no CORS needed.
 - Local dev (`localhost:8765` → `<jetson-ip>:8080`): cross-origin. The Jetson
   FastAPI already sets `allow_origins=["*"]` in `src/server.py`.
 
@@ -152,60 +173,3 @@ When exposed via Caddy to the public internet, consider:
   ```
 - Or keep `/gpu/*` behind a tunnel (Tailscale exit node, CF Access, etc.) so
   only authenticated users reach it.
-
----
-
-## Alternative: Helm on k3s
-
-Instead of Caddy-on-VM, the same frontend can be deployed to a k3s cluster
-using the Helm chart under [helm/mandelbrot/](helm/mandelbrot/). The Jetson
-still runs natively (step 4 above stays the same) — the chart creates a
-`Service: ExternalName` pointing at the Jetson host and a Traefik
-StripPrefix middleware so the Ingress can route `/gpu/*` to it.
-
-### 1. Build + push the frontend image
-
-```sh
-docker build -t ghcr.io/you/mandelbrot:TAG .
-docker push ghcr.io/you/mandelbrot:TAG
-```
-
-The repo-root `Dockerfile` copies `frontend/` + `Caddyfile` into
-`caddy:2-alpine`. In k3s the Caddyfile's `/gpu` block is unused — the Ingress
-does the proxying — but keeping one image means local dev and standalone
-Caddy-on-VM both use the same artifact.
-
-### 2. Install the chart
-
-```sh
-helm install mandelbrot ./helm/mandelbrot \
-  --namespace mandelbrot --create-namespace \
-  -f my-values.yaml
-```
-
-Minimum `my-values.yaml`:
-```yaml
-hostname: mandelbrot.calje.eu
-image:
-  repository: ghcr.io/you/mandelbrot
-  tag: "TAG"
-jetson:
-  externalHost: jetson.tail-xyz.ts.net   # LAN IP, Tailscale name, or tunnel
-  externalPort: 8080
-ingress:
-  tls:
-    enabled: true
-    clusterIssuer: letsencrypt-prod
-```
-
-### 3. Verify
-
-```sh
-kubectl get pods -n mandelbrot
-kubectl get ingress -n mandelbrot
-curl https://mandelbrot.calje.eu/
-curl https://mandelbrot.calje.eu/gpu/jobs
-```
-
-Full install/upgrade/uninstall guide and all values:
-[helm/mandelbrot/README.md](helm/mandelbrot/README.md).

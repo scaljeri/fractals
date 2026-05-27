@@ -125,15 +125,18 @@
   <div id="jobs-container"></div>
   <div class="toast" id="toast"></div>
 
+<!-- Per-machine config (gitignored). Optional; defaults apply if missing. -->
+<script src="config.local.js" onerror="this.remove()"></script>
 <script type="module">
-// Keep this in sync with main.js. If you change the resolution rule there,
-// change it here too.
-const PRODUCTION_HOST = 'mandelbrot.calje.eu';
+// Per-machine config lives in config.local.js (gitignored). See
+// config.example.js for the schema. Falls back to safe defaults if missing.
+// Keep this resolver in sync with main.js.
+const PRODUCTION_HOST = window.MANDELBROT_CONFIG?.productionHost || '';
+const LAN_JETSON_URL  = window.MANDELBROT_CONFIG?.lanJetsonUrl  || 'http://jetson.local:8080';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-const LAN_JETSON_URL = 'http://monster:8080';
 function resolveJetsonUrl() {
   const host = window.location.hostname;
-  if (host === PRODUCTION_HOST) return window.location.origin + '/gpu';
+  if (PRODUCTION_HOST && host === PRODUCTION_HOST) return window.location.origin + '/gpu';
   if (LOCAL_HOSTS.has(host))   return LAN_JETSON_URL;
   return localStorage.getItem('jetsonUrl') || 'http://jetson.local:8080';
 }

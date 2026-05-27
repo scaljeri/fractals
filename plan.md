@@ -185,7 +185,7 @@ infrastructural centerpiece; everything else is built around it.
 
 **Deployment shift** — see [[jetson-ui-hidden]]
 - Site now ships as static files. Cloudflare Pages / Netlify / S3 / nginx all work.
-- Jetson backend hidden from UI but wiring (`/jetson/`, Helm chart, Dockerfile) still on disk.
+- Jetson backend hidden from UI but wiring (`/jetson/`, Dockerfile) still on disk.
 - favicon.ico (multi-resolution from `assets/renders/whole.png`).
 
 ## Done log

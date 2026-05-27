@@ -12,7 +12,7 @@ renders to an external **Jetson Orin AGX** running a CUDA + NVENC backend.
 Stack summary:
 - Frontend: a single-page WebGPU app, no build step (ES modules + CDN imports).
 - Backend (optional): FastAPI + CUDA kernel on a Jetson, reachable via `/gpu/*`.
-- Ship target: k3s cluster serving the frontend; Jetson stays outside the cluster.
+- Ship target: any static host serving the frontend; Jetson stays separate.
 
 ## Folder layout
 
@@ -26,12 +26,11 @@ mandelbrot/
 │   ├── src/             # server.py, worker.py, kernel.cu, reference.py
 │   ├── scripts/         # build.sh, deploy.sh, test-render.sh
 │   └── README.md
-├── helm/mandelbrot/     # Helm chart for k3s deployment
 ├── Dockerfile           # Caddy image: frontend + /gpu proxy (dev convenience)
 ├── Caddyfile            # Caddy config used by the image and docker compose
-├── Caddyfile.example    # Standalone template for non-k3s (Caddy-on-VM) setups
+├── Caddyfile.example    # Standalone template for Caddy-on-VM setups
 ├── docker-compose.yml   # Local dev orchestration
-├── DEPLOY.md            # Deployment paths (Caddy-on-VM and Helm)
+├── DEPLOY.md            # Deployment guide (Caddy-on-VM)
 └── MEMORY.md            # Architecture decisions + current feature state
 ```
 
@@ -39,22 +38,26 @@ mandelbrot/
 
 ```
  ┌────────┐          ┌────────────────────┐          ┌──────────────────┐
- │browser │──https──▶│ k3s ingress (Traefik)│──────▶│ frontend (Caddy) │
- │        │          │  mandelbrot.calje.eu │          │ static WebGPU app│
+ │browser │──https──▶│ reverse proxy        │──────▶│ frontend (static)│
+ │        │          │  <your-domain>       │          │ WebGPU app       │
  │        │          │                      │          └──────────────────┘
  │        │          │  /gpu/* ─────┐       │
  └────────┘          └──────────────┼──────┘
-                                    │ ExternalName
+                                    │
                                     ▼
                          ┌──────────────────────┐
                          │  Jetson Orin AGX     │
                          │  FastAPI + CUDA      │
-                         │  (outside k3s)       │
+                         │  (LAN / tunnel)      │
                          └──────────────────────┘
 ```
 
-- `mandelbrot.calje.eu/` → Caddy Deployment serving `frontend/`
-- `mandelbrot.calje.eu/gpu/*` → StripPrefix middleware → ExternalName Service → Jetson LAN/Tailscale/tunnel URL
+- `<your-domain>/` → static `frontend/` (Caddy, nginx, S3, GH Pages, …)
+- `<your-domain>/gpu/*` → reverse-proxied to the Jetson (LAN / Tailscale / tunnel)
+
+Per-machine specifics (production hostname, Jetson LAN URL, deploy target)
+live in **gitignored** files: `frontend/config.local.js`, `frontend/.env`, and
+`jetson/.env`. Tracked `*.example` files document the schemas.
 
 ## How to run locally
 
@@ -74,29 +77,21 @@ automatically.
 
 Stop with `docker compose down`.
 
-## How to deploy the frontend to k3s
+## How to deploy the frontend
 
-See [helm/mandelbrot/README.md](helm/mandelbrot/README.md) for the full guide.
-Short version:
+The static frontend can be hosted anywhere (Caddy file_server, nginx, S3,
+GitHub Pages, …). See [DEPLOY.md](DEPLOY.md) for the rsync-over-SSH flow:
 
 ```bash
-# Build + push the image
-docker build -t ghcr.io/you/mandelbrot:TAG .
-docker push ghcr.io/you/mandelbrot:TAG
-
-# Install the chart
-helm install mandelbrot ./helm/mandelbrot \
-  --namespace mandelbrot --create-namespace \
-  -f my-values.yaml
+cp frontend/config.example.js frontend/config.local.js   # productionHost + lanJetsonUrl
+cp frontend/.env.example frontend/.env                   # DEPLOY_USER/HOST/DIR
+bash frontend/scripts/deploy.sh
 ```
-
-`my-values.yaml` sets `hostname`, `image.tag`, and `jetson.externalHost`.
-TLS is handled by cert-manager via the configured `ClusterIssuer`.
 
 ## How to deploy the Jetson backend
 
-The Jetson runs outside the cluster. Deployment is native (systemd) and
-scripted — see [jetson/README.md](jetson/README.md). Short version:
+The Jetson runs natively (systemd) — see [jetson/README.md](jetson/README.md).
+Short version:
 
 ```bash
 cp jetson/.env.example jetson/.env
@@ -104,9 +99,6 @@ cp jetson/.env.example jetson/.env
 bash jetson/scripts/build.sh
 bash jetson/scripts/deploy.sh
 ```
-
-Then point the cluster (or local dev) at the Jetson via `jetson.externalHost`
-in `my-values.yaml`, or `$JETSON_URL` for docker compose.
 
 ## Conventions
 

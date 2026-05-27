@@ -30,6 +30,11 @@ venv/
 DEPLOY.local.md
 *.local.md
 
+# Per-machine browser-side config (frontend/config.local.js holds the
+# production hostname + LAN Jetson URL; see frontend/config.example.js).
+# The general *.local.* catch-all also applies to any future *.local.js files.
+*.local.js
+
 # Render outputs (generated, large, regenerable)
 *.ppm
 frontend/render-*.ppm
@@ -40,10 +45,6 @@ jetson/renders/
 
 # Ad-hoc debug scripts (kept out of source; recreate when needed)
 frontend/tr-bruteforce.mjs
-
-# Helm release artefacts
-helm/**/charts/
-helm/**/*.tgz
 
 # Docker
 docker-compose.override.yml

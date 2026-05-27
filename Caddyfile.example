@@ -1,12 +1,13 @@
-# Caddy reverse-proxy config for mandelbrot.calje.eu
+# Caddy reverse-proxy config for the Mandelbrot frontend.
 #
 # Serves the static browser app and proxies /gpu/* to the Jetson render
-# service when available. Copy to /etc/caddy/Caddyfile (or include as needed)
-# and replace <jetson-ip> with the actual LAN / tailscale address.
+# service when available. Copy to /etc/caddy/Caddyfile (or include as needed),
+# replace <your-domain> with your actual hostname, and replace <jetson-ip>
+# with the Jetson's LAN / Tailscale address.
 #
 # Reload with:  sudo systemctl reload caddy
 
-mandelbrot.calje.eu {
+<your-domain> {
     # Static browser app — point at wherever you deploy index.html + main.js.
     root * /var/www/mandelbrot
     file_server

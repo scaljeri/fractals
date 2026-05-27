@@ -4729,20 +4729,18 @@ progressCancel.addEventListener('click', () => {
 });
 
 // --- Jetson Orin render service ---
-// Where to reach the Jetson depends on how the browser itself is being served:
-//  - mandelbrot.calje.eu → reverse-proxied at /gpu on the same origin (prod)
-//  - localhost / 127.0.0.1 → direct to monster:8080 on the LAN (home dev)
-//  - anything else → localStorage override, falls back to jetson.local:8080
-const PRODUCTION_HOST = 'mandelbrot.calje.eu';
+// Per-machine config lives in config.local.js (gitignored). See
+// config.example.js for the schema. Falls back to safe defaults if missing.
+const PRODUCTION_HOST = window.MANDELBROT_CONFIG?.productionHost || '';
+const LAN_JETSON_URL  = window.MANDELBROT_CONFIG?.lanJetsonUrl  || 'http://jetson.local:8080';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-const LAN_JETSON_URL = 'http://monster:8080';
 function resolveJetsonUrl() {
   const host = window.location.hostname;
-  if (host === PRODUCTION_HOST) return window.location.origin + '/gpu';
+  if (PRODUCTION_HOST && host === PRODUCTION_HOST) return window.location.origin + '/gpu';
   if (LOCAL_HOSTS.has(host))   return LAN_JETSON_URL;
   return localStorage.getItem('jetsonUrl') || 'http://jetson.local:8080';
 }
-const IS_PRODUCTION = window.location.hostname === PRODUCTION_HOST;
+const IS_PRODUCTION = !!PRODUCTION_HOST && window.location.hostname === PRODUCTION_HOST;
 
 async function checkJetsonAvailable() {
   const url = resolveJetsonUrl();
