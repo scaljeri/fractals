@@ -1,7 +1,0 @@
-.env
-build/
-renders/
-__pycache__/
-*.pyc
-.venv/
-*.so
